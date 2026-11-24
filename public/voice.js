@@ -149,7 +149,7 @@ export class Voice {
     if (item.clips) {
       const token = (this.current = { ...item });
       this.pauseMicForSpeech();
-      this.cb.onSpeaking(item.id);
+      this.cb.onSpeaking(item.id, item.text);
       this.playNatural(item, token)
         .catch(() => { if (this.current === token) { this.current = null; this.queue.unshift({ id: item.id, text: item.text }); } }) // fall back to system voice
         .finally(() => {
@@ -175,7 +175,7 @@ export class Voice {
     u.onend = finish;
     u.onerror = finish;
     this.pauseMicForSpeech();
-    this.cb.onSpeaking(item.id);
+    this.cb.onSpeaking(item.id, item.text);
     speechSynthesis.cancel(); // clears a stuck queue (Safari/Chrome quirk)
     speechSynthesis.speak(u);
   }
@@ -296,8 +296,12 @@ export class Voice {
     this.cb.onState();
   }
 
+  // Is your mic able to pick you up right now? (Push to talk: yes, while held.)
+  get micActive() { return this.mode === 'ptt' ? true : this.openOn; }
+
   async toggleOpen() {
     this.openOn = !this.openOn;
+    store.set('micOn', this.openOn ? '1' : '0');
     if (this.engine === 'browser') {
       if (this.openOn) { this.micPaused = false; this.startRec(); } else { try { this.rec.stop(); } catch {} this.listening = false; }
     } else if (this.openOn) {

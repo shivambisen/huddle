@@ -28,6 +28,14 @@ You can mix accounts in one team, e.g. Developer on Claude and Intern on ChatGPT
 - **Agents' replies → voice:** Kokoro-82M, an open neural TTS model, runs locally with 14 natural voices (American/British, female/male). Each teammate gets a distinct voice by default, and you can pick and preview one per teammate. Audio is made sentence by sentence as soon as a reply arrives, so it's usually ready before that agent's turn to speak. Downloaded once (~330 MB). System voices remain as an instant fallback in Settings.
 - Hold **Space** (or the mic button) to talk, or switch to open mic.
 
+## Feels like a meeting, not a chat
+
+- **Agents think out loud.** Every reply starts with a short spoken line ("Sure, let me check the code") that plays within ~2 seconds, then brief progress, then a one-to-two sentence outcome. Details go to the chat, not your ears.
+- **One live process per agent.** Claude agents keep a Claude Code process open for the whole call (stream-json in and out), so there's no boot time per turn. Processes start while you join and close 10 minutes after everyone leaves.
+- **Model and effort per agent, changeable mid-call.** Hover a tile → ⋮, or use the People panel. The agent restarts with the new settings and keeps its memory of the call. Lower effort answers faster; Sonnet/Haiku at Low effort is the snappiest.
+- **It waits for you to finish.** If you keep talking before an agent has started using tools, it stops and replies to everything you said.
+- **Agents stay quiet when they have nothing to add** to an "everyone" question, and only hand work to a teammate when you asked them to.
+
 ## Who answers (no talking over each other)
 
 `lib/router.js` routes every message:
@@ -35,7 +43,8 @@ You can mix accounts in one team, e.g. Developer on Claude and Intern on ChatGPT
 1. **Clicked tile / chat "To:"**: only that agent.
 2. **A name or nickname** at the start ("Hey intern, …", "Developer and researcher, …") or `@name` anywhere. It tolerates small speech-to-text slips.
 3. **"Everyone / team / all, …"**: the whole room; replies take turns.
-4. Otherwise the conversation **stays with whoever you last addressed** (or the team lead).
+4. **"Who here…", "Does anyone…", "any of you"** anywhere in the sentence: everyone.
+5. No name at all: if you're still mid-thought (within a few seconds), the same people; if an agent just asked you a question, that agent; otherwise a small fast model (Haiku on your Claude login) reads the last few lines and guesses, falling back to whoever you last talked to after 3 seconds.
 
 Then the floor rules: agents only act on lines addressed to them, one voice speaks at a time (others show ✋), your voice interrupts them, and in open-mic mode without headphones the mic pauses while agents talk so they never hear each other.
 

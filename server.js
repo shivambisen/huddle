@@ -79,24 +79,29 @@ export const roleVoice = (project, roleId) => {
 };
 
 // ---------- meetings ----------
-const meetings = new Map(); // projectId -> { meeting, sockets }
+const meetings = new Map(); // projectId -> { meeting, sockets, idle }
 function room(project) {
   let r = meetings.get(project.id);
   if (!r) {
     const sockets = new Set();
     const meeting = new Meeting(project, DATA, (msg) => {
-      if (msg.type === 'entry' && msg.entry.say && msg.entry.from !== 'you' && settings.speech.voices !== 'system') {
-        const voice = roleVoice(meeting.project, msg.entry.from);
-        for (const part of sentences(msg.entry.say)) synth(part, voice, MODEL_DIR).catch(() => {});
-      }
       const s = JSON.stringify(msg);
       for (const ws of sockets) if (ws.readyState === 1) ws.send(s);
+    }, {
+      smartAddressing: () => settings.smartAddressing !== false,
+      // Render each spoken line the moment it's written, so audio is ready when the agent gets the floor.
+      onSpeech: (proj, roleId, text) => {
+        if (settings.speech.voices === 'system') return;
+        const voice = roleVoice(proj, roleId);
+        for (const part of sentences(text)) synth(part, voice, MODEL_DIR).catch(() => {});
+      },
     });
-    r = { meeting, sockets };
+    r = { meeting, sockets, idle: null };
     meetings.set(project.id, r);
   }
   return r;
 }
+const IDLE_MS = 10 * 60 * 1000; // close agent processes 10 minutes after everyone leaves
 
 // ---------- http ----------
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json' };
@@ -141,8 +146,8 @@ async function apiRoute(req, res, parts) {
       return send(res, 200, { ok: true, log, status: await providerStatus(b) });
     }
     if (c === 'test' && M === 'POST') {
-      const { model } = await body(req);
-      return send(res, 200, await testProvider(b, model || 'default', DATA));
+      const { model, effort } = await body(req);
+      return send(res, 200, await testProvider(b, model || 'default', DATA, effort));
     }
   }
 
@@ -185,7 +190,7 @@ async function apiRoute(req, res, parts) {
       meetings.get(p.id)?.meeting.syncRoles(p);
       return send(res, 200, p);
     }
-    if (M === 'DELETE') { projects = projects.filter((x) => x !== p); saveProjects(); meetings.delete(p.id); return send(res, 200, { ok: true }); }
+    if (M === 'DELETE') { projects = projects.filter((x) => x !== p); saveProjects(); meetings.get(p.id)?.meeting.close(); meetings.delete(p.id); return send(res, 200, { ok: true }); }
   }
 
   if (a === 'fs' && b === 'check' && M === 'POST') {
@@ -226,15 +231,31 @@ wss.on('connection', (ws, req) => {
   const project = projects.find((p) => p.id === pid);
   if (!project) return ws.close(4004, 'No such project');
   const r = room(project);
+  clearTimeout(r.idle);
   r.sockets.add(ws);
   ws.send(JSON.stringify({ type: 'state', ...r.meeting.snapshot() }));
+  r.meeting.warm(); // open each Claude agent's process now, not on the first question
   ws.on('message', (m) => {
     let x; try { x = JSON.parse(m); } catch { return; }
-    if (x.type === 'say') r.meeting.say(x);
+    if (x.type === 'say') r.meeting.say(x).catch((e) => console.error('say failed:', e.message));
     if (x.type === 'stop') r.meeting.stop(x.id);
     if (x.type === 'clear') r.meeting.clear();
+    if (x.type === 'role') {
+      // Change a teammate's model / effort / voice / permissions mid-call.
+      const role = project.roles.find((q) => q.id === x.id);
+      if (!role) return;
+      for (const k of ['model', 'effort', 'voice', 'permission']) if (k in (x.patch || {})) role[k] = String(x.patch[k]);
+      saveProjects();
+      r.meeting.syncRoles(project);
+      r.meeting.warm(); // restarts that agent's process with the new settings; its memory is kept
+      const s = JSON.stringify({ type: 'role', role });
+      for (const w of r.sockets) if (w.readyState === 1) w.send(s);
+    }
   });
-  ws.on('close', () => r.sockets.delete(ws));
+  ws.on('close', () => {
+    r.sockets.delete(ws);
+    if (!r.sockets.size) r.idle = setTimeout(() => { if (!r.sockets.size) { r.meeting.close(); meetings.delete(project.id); } }, IDLE_MS);
+  });
 });
 
 server.on('error', (e) => {

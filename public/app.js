@@ -30,6 +30,13 @@ async function render() {
 window.addEventListener('hashchange', render);
 render();
 
+// Meeting-friendly defaults: quick models, low effort for talkers, a bit more for builders.
+const tune = (provider, r) => {
+  const builder = r.permission === 'acceptEdits' || r.permission === 'bypassPermissions';
+  if (provider === 'claude') return { model: /intern|assistant/i.test(r.name) && !builder ? 'haiku' : 'sonnet', effort: builder ? 'medium' : 'low' };
+  if (provider === 'codex') return { model: 'default', effort: builder ? 'medium' : 'low' };
+  return { model: 'default', effort: 'default' };
+};
 const saveSettings = async (x) => (settings = await api('/settings', { method: 'PUT', body: x }));
 const connected = (status) => Object.values(status || {}).filter((p) => p.signedIn);
 
@@ -94,7 +101,7 @@ async function viewWelcome(step) {
     const assign = (tpl) => templates[tpl].roles.map((r, i) => {
       const prov = r.prefer.find((p) => status[p]?.signedIn) || conn[0].id;
       const { prefer, ...rest } = r;
-      return { ...rest, provider: prov, id: Math.random().toString(36).slice(2, 10), color: r.color || COLORS[i % COLORS.length] };
+      return { ...rest, provider: prov, ...tune(prov, r), id: Math.random().toString(36).slice(2, 10), color: r.color || COLORS[i % COLORS.length] };
     });
     st.roles = assign(st.template);
 
@@ -123,7 +130,7 @@ async function viewWelcome(step) {
       $('pcwd').oninput = (e) => { st.cwd = e.target.value; $('cwd-msg').textContent = ''; };
       $('pcwd').onblur = checkDir;
       $app.querySelectorAll('[data-tpl]').forEach((b) => (b.onclick = () => { st.template = b.dataset.tpl; st.roles = assign(st.template); paint(); }));
-      $app.querySelectorAll('select[data-i]').forEach((s) => (s.onchange = () => (st.roles[s.dataset.i].provider = s.value)));
+      $app.querySelectorAll('select[data-i]').forEach((s) => (s.onchange = () => { const r = st.roles[s.dataset.i]; r.provider = s.value; Object.assign(r, tune(s.value, r)); }));
       $('back').onclick = () => go(3);
       $('create').onclick = create;
     };
@@ -201,7 +208,7 @@ async function viewSettings() {
       <label class="field">Agent voices
         <select id="voicestyle"><option value="natural" ${settings.speech.voices !== 'system' ? 'selected' : ''}>Natural: human-sounding, runs locally (Kokoro)</option><option value="system" ${settings.speech.voices === 'system' ? 'selected' : ''}>System voices: instant, more robotic</option></select></label>
       <label class="field">Speech recognition quality <span class="hint">For Local Whisper</span>
-        <select id="quality"><option value="accurate" ${settings.speech.quality !== 'fast' ? 'selected' : ''}>Accurate (base, ~75 MB)</option><option value="fast" ${settings.speech.quality === 'fast' ? 'selected' : ''}>Fast (tiny, ~40 MB)</option></select></label>
+        <select id="quality"><option value="accurate" ${settings.speech.quality !== 'fast' ? 'selected' : ''}>Accurate (base, ~75 MB)</option><option value="fast" ${settings.speech.quality === 'fast' ? 'selected' : ''}>Fast (tiny, ~40 MB)</option><option value="best" ${settings.speech.quality === 'best' ? 'selected' : ''}>Best (small, ~250 MB, slower)</option></select></label>
       <div class="row"><button class="btn primary" id="save">Save</button></div>
     </div>
     <h3 class="sub">Microphone & speech</h3>
@@ -250,6 +257,8 @@ async function viewProject(pid) {
           <select data-k="provider">${Object.values(status).map((x) => `<option value="${x.id}" ${x.id === r.provider ? 'selected' : ''} ${x.signedIn || x.id === r.provider ? '' : 'disabled'}>${esc(x.label)} · ${esc(x.product)}${x.signedIn ? '' : ' (not connected)'}</option>`).join('')}</select></label>
         <label class="field">Model
           <select data-k="model">${models.map((m) => `<option value="${esc(m.id)}" ${m.id === (r.model || 'default') ? 'selected' : ''}>${esc(m.label)}</option>`).join('')}${hasModel ? '' : `<option selected value="${esc(r.model)}">${esc(r.model)}</option>`}</select></label>
+        ${prov?.efforts?.length ? `<label class="field">Effort <span class="hint">Lower answers faster in calls</span>
+          <select data-k="effort">${prov.efforts.map((e) => `<option value="${e}" ${e === (r.effort || ((r.permission === 'acceptEdits' || r.permission === 'bypassPermissions') ? 'medium' : 'low')) ? 'selected' : ''}>${e[0].toUpperCase() + e.slice(1)}</option>`).join('')}</select></label>` : ''}
         <label class="field">Allowed to
           <select data-k="permission">${Object.entries(PERMS).map(([k, v]) => `<option value="${k}" ${k === (r.permission || 'acceptEdits') ? 'selected' : ''} title="${esc(v.hint)}">${v.label}</option>`).join('')}</select></label>
         <label class="field">Voice
@@ -294,7 +303,7 @@ async function viewProject(pid) {
           const k = el.dataset.k;
           r[k] = k === 'aliases' ? el.value.split(',').map((s) => s.trim()).filter(Boolean) : el.value;
           touch();
-          if (k === 'provider') { r.model = 'default'; paint(); }
+          if (k === 'provider') { Object.assign(r, tune(r.provider, r)); paint(); }
           if (k === 'color') card.querySelector('.av').style.background = el.value;
           if (k === 'name') card.querySelector('h3').textContent = el.value || 'New teammate';
         };
@@ -312,14 +321,14 @@ async function viewProject(pid) {
       };
       card.querySelector('[data-act=test]').onclick = async () => {
         tests[r.id] = 'run'; paint();
-        try { tests[r.id] = await api(`/providers/${r.provider}/test`, { method: 'POST', body: { model: r.model } }); }
+        try { tests[r.id] = await api(`/providers/${r.provider}/test`, { method: 'POST', body: { model: r.model, effort: r.effort } }); }
         catch (e) { tests[r.id] = { error: e.message }; }
         paint();
       };
     });
     $('add').onclick = () => {
       const prov = Object.values(status).find((x) => x.signedIn)?.id || 'claude';
-      draft.roles.push({ id: Math.random().toString(36).slice(2, 10), name: '', title: '', provider: prov, model: 'default', permission: 'plan', color: COLORS[draft.roles.length % COLORS.length], prompt: '' });
+      draft.roles.push({ id: Math.random().toString(36).slice(2, 10), name: '', title: '', provider: prov, ...tune(prov, { name: '', permission: 'plan' }), permission: 'plan', color: COLORS[draft.roles.length % COLORS.length], prompt: '' });
       touch(); paint();
       $app.querySelector('.role-card:last-child [data-k=name]').focus();
     };
