@@ -107,7 +107,8 @@ const server = http.createServer(async (req, res) => {
 
 // ---------- websocket ----------
 const wss = new WebSocketServer({ server, path: '/ws', verifyClient: ({ req }) => okOrigin(req) });
-wss.on('connection', (ws, req) => {
+wss.on('error', () => {}); // listen errors are reported by server.on('error') below
+wss.on('connection',(ws, req) => {
   const pid = new URL(req.url, 'http://x').searchParams.get('project');
   const project = projects.find((p) => p.id === pid);
   if (!project) return ws.close(4004, 'No such project');
@@ -123,4 +124,9 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => r.sockets.delete(ws));
 });
 
-server.listen(PORT, HOST, () => console.log(`Huddle running at http://localhost:${PORT}`));
+server.on('error', (e) => {
+  if (e.code !== 'EADDRINUSE') throw e;
+  console.error(`Port ${PORT} is already in use. Huddle may already be running at http://localhost:${PORT}\nUse another port with: PORT=4318 npm start`);
+  process.exit(1);
+});
+server.listen(PORT, HOST,() => console.log(`Huddle running at http://localhost:${PORT}`));
