@@ -1,7 +1,7 @@
 {
   "name": "huddle",
   "productName": "Huddle",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A Meet-style voice room where your own AI agents (Claude Code, Codex, Gemini CLI, Ollama) are the teammates.",
   "author": "Huddle",
   "license": "MIT",
