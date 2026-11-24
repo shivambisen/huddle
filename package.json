@@ -1,0 +1,9 @@
+{
+  "name": "huddle",
+  "version": "0.1.0",
+  "description": "A Meet-style voice room where your own AI agents (Claude Code, Codex, Gemini CLI, Ollama) are the teammates.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": { "start": "node server.js", "dev": "node --watch server.js" },
+  "dependencies": { "ws": "^8.18.0" }
+}
