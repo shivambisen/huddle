@@ -19,6 +19,8 @@ const I = {
   send: '<path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2 .01 7Z"/>',
   stop: '<path d="M6 6h12v12H6z"/>',
   skip: '<path d="M6 18l8.5-6L6 6v12ZM16 6v12h2V6h-2Z"/>',
+  pip: '<path d="M19 7h-8v6h8V7Zm2-4H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm0 16.01H3V4.98h18v14.03Z"/>',
+  back: '<path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2Z"/>',
 };
 const svg = (n) => `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${I[n]}</svg>`;
 const EFFORT_LABEL = { minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'X-High', max: 'Max' };
@@ -112,6 +114,14 @@ export async function viewMeeting($app, pid, settings, onLeave) {
     if (ws.readyState !== 1) return toast('Not connected yet');
     ws.send(JSON.stringify({ type: 'say', text, to: via === 'chat' ? $('to').value : st.target, via }));
   };
+  const appName = (r) => (r.provider === 'claude' ? 'Claude Code' : r.provider === 'codex' ? 'Codex' : null);
+  const openSession = async (id) => {
+    try {
+      const r = await api(`/projects/${pid}/agents/${id}/open`, { method: 'POST', body: {} });
+      if (!r.opened && r.command) prompt('Run this in a terminal to open the session:', r.command);
+      else toast(`Opened ${nameOf(id)}'s session in ${appName(roles[id])} (Terminal)`);
+    } catch (e) { toast(e.message, 5000); }
+  };
   const setRole = (id, patch) => { Object.assign(roles[id], patch); ws.send(JSON.stringify({ type: 'role', id, patch })); };
 
   // ----- tiles -----
@@ -155,6 +165,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
   const paintTiles = () => {
     const stage = $('stage');
     stage.innerHTML = ['you', ...order].map(tileHtml).join('');
+    paintPip();
     if (st.cam) stage.querySelector('video').srcObject = st.cam;
     stage.querySelectorAll('.gm-tile.agent').forEach((t) => {
       const id = t.dataset.id;
@@ -183,7 +194,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
         <optgroup label="Natural">${nlist.map((v) => `<option value="${v.id}" ${v.id === nv && (!r.voice || r.voice === v.id) ? 'selected' : ''}>${esc(v.label)} · ${v.accent} ${v.gender}</option>`).join('')}</optgroup>
         <optgroup label="System">${slist.map((v) => `<option value="${esc(v.name)}" ${v.name === r.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}</optgroup>
       </select><button class="gm-pill" data-act="hear">Hear</button></div></label>
-      <div class="gm-row end">${st.agents[id]?.status === 'working' ? `<button class="gm-pill" data-act="stop">${svg('stop')} Stop reply</button>` : ''}<button class="gm-pill" data-act="close">Done</button></div>
+      <div class="gm-row end">${appName(r) ? `<button class="gm-pill" data-act="open" title="See everything this teammate did, in ${appName(r)}">Open in ${appName(r)}</button>` : ''}${st.agents[id]?.status === 'working' ? `<button class="gm-pill" data-act="stop">${svg('stop')} Stop</button>` : ''}<button class="gm-pill" data-act="close">Done</button></div>
       <p class="gm-muted small">Changes apply from ${esc(r.name)}'s next reply. Their memory of the call is kept.</p>`;
     m.hidden = false;
     const rect = (anchor || $('stage')).getBoundingClientRect();
@@ -197,6 +208,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
       if (nlist.some((x) => x.id === v)) { try { await previewNatural(`Hi ${host}, this is how I'll sound.`, v); } catch { toast('Voice is still loading'); } }
       else { const u = new SpeechSynthesisUtterance(`Hi ${host}, this is how I'll sound.`); u.voice = slist.find((x) => x.name === v) || null; speechSynthesis.speak(u); }
     };
+    m.querySelector('[data-act=open]')?.addEventListener('click', () => openSession(id));
     const stopBtn = m.querySelector('[data-act=stop]');
     if (stopBtn) stopBtn.onclick = () => ws.send(JSON.stringify({ type: 'stop', id }));
     m.querySelector('[data-act=close]').onclick = closeMenu;
@@ -216,7 +228,9 @@ export async function viewMeeting($app, pid, settings, onLeave) {
     c.hidden = false;
     c.innerHTML = `<span class="gm-mini" style="background:${r ? r.color : '#5f6368'}">${initial(nameOf(id))}</span>
       <div><div class="gm-cap-name">${esc(nameOf(id))}${toTxt ? ` <span class="gm-cap-to">→ ${esc(toTxt)}</span>` : ''}${note ? ` <span class="gm-cap-to">${esc(note)}</span>` : ''}</div><div class="gm-cap-text">${esc(text)}${live ? '…' : ''}</div></div>`;
-    capTimer = setTimeout(() => (c.hidden = true), live ? 15000 : 7000);
+    const pc = pip?.document.getElementById('pip-cap');
+    if (pc) pc.innerHTML = `<b>${esc(nameOf(id))}</b> ${esc(text)}${live ? '…' : ''}`;
+    capTimer = setTimeout(() => { c.hidden = true; const x = pip?.document.getElementById('pip-cap'); if (x) x.textContent = ''; }, live ? 15000 : 7000);
   }
 
   // ----- bottom bar -----
@@ -229,6 +243,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
       <button class="gm-btn ${st.captions ? 'on' : ''}" id="cc" title="Captions">${svg('cc')}</button>
       <button class="gm-btn ${v.muted ? 'off' : ''}" id="spk" title="${v.muted ? 'Agents are muted' : 'Mute agents'}">${svg(v.muted ? 'volOff' : 'vol')}</button>
       <button class="gm-btn" id="skip" title="Skip whoever is speaking">${svg('skip')}</button>
+      <button class="gm-btn ${pip ? 'on' : ''}" id="pipbtn" title="Pop out: keep the call on top of other windows">${svg('pip')}</button>
       <button class="gm-btn" id="more" title="More options">${svg('more')}</button>
       <button class="gm-end" id="leave" title="Leave call">${svg('end')}</button>`;
     const mic = $('mic');
@@ -246,6 +261,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
     $('cc').onclick = () => { st.captions = !st.captions; localStorage.setItem('huddle.cc', st.captions ? '1' : '0'); if (!st.captions) $('caption').hidden = true; paintBar(); };
     $('spk').onclick = () => v.setMuted(!v.muted);
     $('skip').onclick = () => v.skip();
+    $('pipbtn').onclick = () => (pip ? closePip() : openPip());
     $('leave').onclick = () => (location.hash = '#/');
     $('more').onclick = (e) => {
       const m = $('menu');
@@ -264,6 +280,60 @@ export async function viewMeeting($app, pid, settings, onLeave) {
     };
     paintTiles();
   }
+
+  // ----- picture-in-picture (like Meet: a small always-on-top window) -----
+  // Uses the Document Picture-in-Picture API (Chrome, Edge, Brave 116+).
+  let pip = null;
+  async function openPip() {
+    if (pip) return;
+    if (!('documentPictureInPicture' in window)) { toast('Pop-out needs Chrome, Edge or Brave (version 116 or newer).', 5000); return; }
+    try {
+      pip = await documentPictureInPicture.requestWindow({ width: 340, height: 380 });
+    } catch (e) { toast("Couldn't pop out: " + e.message); return; }
+    const d = pip.document;
+    d.title = p.name;
+    for (const href of ['https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap', location.origin + '/styles.css']) {
+      const l = d.createElement('link'); l.rel = 'stylesheet'; l.href = href; d.head.append(l);
+    }
+    d.body.className = 'pip-body';
+    d.body.innerHTML = `<div class="pip"><div class="pip-grid" id="pip-grid"></div><div class="pip-cap" id="pip-cap"></div><div class="pip-bar" id="pip-bar"></div></div>`;
+    pip.addEventListener('pagehide', () => { pip = null; paintBar(); });
+    // Space works as push to talk inside the pop-out too.
+    d.addEventListener('keydown', kd); d.addEventListener('keyup', ku);
+    paintPip(); paintBar();
+  }
+  function closePip() { pip?.close(); pip = null; }
+  function paintPip() {
+    if (!pip) return;
+    const d = pip.document;
+    const grid = d.getElementById('pip-grid');
+    if (!grid) return;
+    const ids = ['you', ...order];
+    grid.style.setProperty('--n', ids.length > 4 ? 3 : 2);
+    grid.innerHTML = ids.map((id) => {
+      const r = roles[id]; const a = st.agents[id] || {};
+      const speaking = id === 'you' ? voice.listening : st.speaking === id;
+      const state = id === 'you' ? '' : a.status === 'working' ? '<span class="pip-state">working…</span>' : st.queued.has(id) ? '<span class="pip-state">✋</span>' : '';
+      return `<div class="pip-tile ${speaking ? 'speaking' : ''}"><span class="pip-av" style="background:${r ? r.color : '#5f6368'}">${initial(nameOf(id))}</span>${state}<span class="pip-name">${esc(id === 'you' ? 'You' : r.name)}</span></div>`;
+    }).join('');
+    const v = voice;
+    const bar = d.getElementById('pip-bar');
+    bar.innerHTML = `
+      ${v.supported ? `<button class="gm-btn ${v.micActive ? '' : 'off'} ${v.listening ? 'live' : ''}" id="pm" title="Microphone">${svg(v.micActive ? 'mic' : 'micOff')}</button>` : ''}
+      <button class="gm-btn ${v.muted ? 'off' : ''}" id="ps" title="Agents' voices">${svg(v.muted ? 'volOff' : 'vol')}</button>
+      <button class="gm-btn" id="pb" title="Back to tab">${svg('back')}</button>
+      <button class="gm-end" id="pe" title="Leave call">${svg('end')}</button>`;
+    const pm = bar.querySelector('#pm');
+    if (pm) {
+      if (v.mode === 'ptt') { pm.onpointerdown = (e) => { e.preventDefault(); v.pttStart(); }; pm.onpointerup = pm.onpointercancel = () => v.pttEnd(); }
+      else pm.onclick = () => v.toggleOpen();
+    }
+    bar.querySelector('#ps').onclick = () => v.setMuted(!v.muted);
+    bar.querySelector('#pb').onclick = () => { closePip(); window.focus(); };
+    bar.querySelector('#pe').onclick = () => { closePip(); location.hash = '#/'; };
+  }
+  // Like Meet: when you switch away from the tab during a call, pop out automatically (where the browser allows it).
+  try { navigator.mediaSession.setActionHandler('enterpictureinpicture', () => openPip()); } catch {}
 
   // ----- side panel: chat / people / info -----
   const fmt = (text) => esc(text).replace(/```[\w-]*\n?([\s\S]*?)```/g, '<pre>$1</pre>').replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
@@ -327,6 +397,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
             <div class="gm-row"><span class="gm-mini lg" style="background:${r.color}">${initial(r.name)}</span>
               <div class="grow"><b>${esc(r.name)}</b><div class="gm-muted">${a.status === 'working' ? esc(a.activity || 'Working…') : esc(r.title || '')}</div></div>
               ${a.status === 'working' ? `<button class="gm-icon sm" data-stop="${id}" title="Stop this reply">${svg('stop')}</button>` : ''}</div>
+            ${appName(r) ? `<button class="gm-link" data-open="${id}">Open their session in ${appName(r)} ↗</button>` : ''}
             <div class="gm-row">
               <select data-k="model" title="Model">${(prov.models?.length ? prov.models : [{ id: 'default', label: 'Default' }]).map((x) => `<option value="${esc(x.id)}" ${x.id === (r.model || 'default') ? 'selected' : ''}>${esc(prov.label || '')} ${esc(x.label)}</option>`).join('')}</select>
               ${prov.efforts?.length ? `<select data-k="effort" title="Effort">${prov.efforts.map((e) => `<option value="${e}" ${e === effortOf(r) ? 'selected' : ''}>${EFFORT_LABEL[e] || e} effort</option>`).join('')}</select>` : ''}
@@ -334,6 +405,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
         }).join('')}`;
       body.querySelectorAll('.gm-person[data-id] select').forEach((s) => (s.onchange = () => { const id = s.closest('[data-id]').dataset.id; setRole(id, { [s.dataset.k]: s.value }); paintTiles(); toast(`${nameOf(id)} updated. Applies from their next reply.`); }));
       body.querySelectorAll('[data-stop]').forEach((b) => (b.onclick = () => ws.send(JSON.stringify({ type: 'stop', id: b.dataset.stop }))));
+      body.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => openSession(b.dataset.open)));
     } else if (st.panel === 'info') {
       $('panel-title').textContent = 'Meeting details';
       body.innerHTML = `<div class="gm-info"><b>${esc(p.name)}</b><div class="gm-muted">Folder: ${esc(p.cwd)}</div>
@@ -371,7 +443,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
   addEventListener('keydown', kd); addEventListener('keyup', ku);
 
   onLeave(() => {
-    closed = true; ws?.close(); clearInterval(clock); cancelAnimationFrame(raf); voice.destroy();
+    closed = true; closePip(); try { navigator.mediaSession.setActionHandler('enterpictureinpicture', null); } catch {} ws?.close(); clearInterval(clock); cancelAnimationFrame(raf); voice.destroy();
     st.cam?.getTracks().forEach((t) => t.stop());
     removeEventListener('keydown', kd); removeEventListener('keyup', ku); removeEventListener('resize', onResize);
     document.removeEventListener('pointerdown', outside);

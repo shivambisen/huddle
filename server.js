@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { allStatus, providerStatus, openLogin, install, testProvider, PROVIDERS } from './lib/providers.js';
+import { allStatus, providerStatus, openLogin, install, testProvider, openSession, PROVIDERS } from './lib/providers.js';
 import { sttStatus, warm, transcribe } from './lib/stt.js';
 import { NATURAL_VOICES, ttsStatus, warmTts, synth, sentences } from './lib/tts.js';
 import { Meeting } from './lib/meeting.js';
@@ -180,6 +180,17 @@ async function apiRoute(req, res, parts) {
     if (!b && M === 'POST') { const p = newProject(await body(req)); projects.push(p); saveProjects(); return send(res, 200, p); }
     const p = projects.find((x) => x.id === b);
     if (!p) return send(res, 404, { error: 'No such project' });
+    if (c === 'agents' && parts[4] && parts[5] === 'open' && M === 'POST') {
+      const role = p.roles.find((r) => r.id === parts[4]);
+      if (!role) return send(res, 404, { error: 'No such teammate' });
+      const live = meetings.get(p.id)?.meeting;
+      let info = live?.sessionInfo(role.id);
+      if (!info?.sessionId) {
+        let saved = {}; try { saved = JSON.parse(fs.readFileSync(path.join(DATA, `${p.id}.sessions.json`), 'utf8')); } catch {}
+        info = { provider: role.provider, sessionId: saved[role.id]?.[role.provider] || null, live: false };
+      }
+      return send(res, 200, await openSession({ ...info, cwd: p.cwd, fork: info.live, title: `Huddle · ${p.name} · ${role.name}` }, DATA));
+    }
     if (M === 'GET') return send(res, 200, p);
     if (M === 'PUT') {
       const x = await body(req);

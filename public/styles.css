@@ -283,3 +283,21 @@ body.in-meeting { background: #202124; }
   .gm-stage-wrap { padding: 8px 8px 0; }
 }
 .gm-caption[hidden] { display: none; }
+.gm-link { align-self: flex-start; border: 0; background: none; color: #1a73e8; font: 500 12px var(--sans); cursor: pointer; padding: 0; }
+.gm-link:hover { text-decoration: underline; }
+
+/* ---------- picture-in-picture pop-out ---------- */
+body.pip-body { margin: 0; background: #202124; color: #e8eaed; font-family: var(--sans); overflow: hidden; }
+.pip { height: 100vh; display: grid; grid-template-rows: 1fr auto auto; gap: 6px; padding: 8px; box-sizing: border-box; }
+.pip-grid { display: grid; grid-template-columns: repeat(var(--n, 2), 1fr); gap: 6px; min-height: 0; }
+.pip-tile { position: relative; background: #3c4043; border-radius: 8px; display: grid; place-items: center; min-height: 0; outline: 0 solid transparent; }
+.pip-tile.speaking { outline: 3px solid #a8c7fa; outline-offset: -3px; }
+.pip-av { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 500; font-size: 17px; }
+.pip-tile.speaking .pip-av { box-shadow: 0 0 0 4px rgba(168,199,250,.4); }
+.pip-name { position: absolute; left: 6px; bottom: 4px; font-size: 11px; font-weight: 500; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: calc(100% - 12px); }
+.pip-state { position: absolute; right: 6px; top: 4px; font-size: 10px; color: #bdc1c6; }
+.pip-cap { font-size: 13px; line-height: 1.35; color: #fff; min-height: 18px; max-height: 54px; overflow: hidden; padding: 0 2px; }
+.pip-cap b { color: #a8c7fa; font-weight: 500; margin-right: 4px; }
+.pip-bar { display: flex; justify-content: center; gap: 8px; padding-bottom: 2px; }
+.pip-bar .gm-btn { width: 44px; height: 36px; }
+.pip-bar .gm-end { width: 52px; height: 36px; }
