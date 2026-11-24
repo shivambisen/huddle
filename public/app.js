@@ -1,4 +1,4 @@
-import { api, esc, toast, initial, COLORS, PERMS, connectCards, micCheck, providerMark, claudeCodeCard } from './lib.js';
+import { api, esc, toast, initial, COLORS, PERMS, connectCards, micCheck, providerMark, claudeCodeCard, orb } from './lib.js';
 import { voices, naturalVoices, naturalVoiceFor, previewNatural } from './voice.js';
 import { viewMeeting } from './meeting.js';
 
@@ -121,7 +121,7 @@ async function viewWelcome(step) {
           <button class="tpl ${k === st.template ? 'on' : ''}" data-tpl="${k}"><b>${esc(t.label)}</b><span>${esc(t.blurb)}</span></button>`).join('')}</div>
         <div class="team-preview">${st.roles.map((r, i) => `
           <div class="tp-row">
-            <span class="av" style="background:${r.color}">${initial(r.name)}</span>
+            ${orb(r.provider, i, { size: 'sm' })}
             <div class="grow"><b>${esc(r.name)}</b><div class="small muted">${esc(r.title)} · ${esc(PERMS[r.permission].label.toLowerCase())}</div></div>
             <select data-i="${i}" class="sel-sm">${conn.map((p) => `<option value="${p.id}" ${p.id === r.provider ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>
           </div>`).join('')}</div>`,
@@ -171,7 +171,7 @@ async function viewHome() {
       ${projects.map((p) => `
         <div class="card project-card">
           <a href="#/p/${p.id}" class="stretch"><div class="row spread"><h3>${esc(p.name)}</h3><span class="pill">${p.roles.length} agent${p.roles.length === 1 ? '' : 's'}</span></div></a>
-          <div class="avatars">${p.roles.map((r) => `<span class="av" style="background:${r.color}" title="${esc(r.name)} · ${esc(status[r.provider]?.label || r.provider)}">${initial(r.name)}</span>`).join('')}</div>
+          <div class="avatars">${p.roles.map((r, i) => `<span title="${esc(r.name)} · ${esc(status[r.provider]?.label || r.provider)}">${orb(r.provider, i, { size: 'xs' })}</span>`).join('')}</div>
           <div class="small muted ellipsis">${esc(p.cwd)}</div>
           <div class="row"><a class="btn primary sm" href="#/p/${p.id}/lobby">Join call</a><a class="btn sm" href="#/p/${p.id}">Edit team</a></div>
         </div>`).join('') || '<p class="muted">No teams yet.</p>'}
@@ -246,7 +246,7 @@ async function viewProject(pid) {
     return `
     <div class="card role-card" data-i="${i}">
       <div class="role-head">
-        <span class="av lg" style="background:${r.color}">${initial(r.name)}</span>
+        ${orb(r.provider, i, { size: 'md' })}
         <div class="grow"><h3>${esc(r.name || 'New teammate')}</h3><div class="small muted">${esc(r.title || '')}${prov ? ` · runs on ${esc(prov.label)}` : ''}</div></div>
         ${draft.leadId === r.id ? '<span class="pill" title="Answers when you haven\'t named anyone yet">Lead</span>' : `<button class="btn sm ghost" data-act="lead">Make lead</button>`}
         <button class="btn sm" data-act="test" ${t === 'run' ? 'disabled' : ''}>${t === 'run' ? '<span class="spin dark"></span> Testing' : 'Test'}</button>
@@ -308,7 +308,7 @@ async function viewProject(pid) {
           r[k] = k === 'aliases' ? el.value.split(',').map((s) => s.trim()).filter(Boolean) : el.value;
           touch();
           if (k === 'provider') { Object.assign(r, tune(r.provider, r)); paint(); }
-          if (k === 'color') card.querySelector('.av').style.background = el.value;
+          if (k === 'color') card.querySelector('.av')?.style.setProperty('background', el.value);
           if (k === 'name') card.querySelector('h3').textContent = el.value || 'New teammate';
         };
       });
@@ -370,8 +370,8 @@ async function viewLobby(pid) {
     <div class="lobby-right">
       <h2>Ready to join?</h2>
       <p class="muted">${esc(p.name)}</p>
-      <div class="team-preview">${p.roles.map((r) => `
-        <div class="tp-row"><span class="av" style="background:${r.color}">${initial(r.name)}</span>
+      <div class="team-preview">${p.roles.map((r, i) => `
+        <div class="tp-row">${orb(r.provider, i, { size: 'sm' })}
           <div class="grow"><b>${esc(r.name)}</b><div class="small muted">${esc(r.title || '')}</div></div>
           <span class="pill ${status[r.provider]?.signedIn ? 'ok' : 'no'}">${esc(status[r.provider]?.label || r.provider)}</span></div>`).join('')}</div>
       ${folder.ok ? '' : `<div class="note small">This team's folder doesn't exist any more: <code>${esc(p.cwd)}</code>. Agents can't work until you <a href="#/p/${pid}">pick another folder</a>.</div>`}

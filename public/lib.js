@@ -3,6 +3,15 @@ import { Mic, transcribe, micDevices } from './mic.js';
 import { browserSpeechWorks, voices, pickVoice, previewNatural } from './voice.js';
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+// An agent's orb: a glowing, swirling sphere in its AI's colours (Claude warm, ChatGPT green,
+// Gemini blue-violet, local grey), nudged in hue per teammate so two on the same AI differ.
+// `state` is '', 'working', 'speaking' or 'error'. Negative animation delays keep the swirl
+// where it was when the screen redraws, so orbs never jump.
+export function orb(provider, index = 0, { state = '', size = '' } = {}) {
+  const shift = ((index * 29) % 26) - 13; // small, so each AI keeps its own colour family
+  const t = (Date.now() / 1000).toFixed(2);
+  return `<span class="orb p-${esc(provider)} ${state} ${size}" style="--shift:${shift}deg;--t:${t}s"><i class="orb-swirl"></i><i class="orb-glint"></i></span>`;
+}
 export const initial = (s) => (s || '?').trim()[0]?.toUpperCase() || '?';
 export const COLORS = ['#c2643d', '#3d7ac2', '#3d9c6a', '#8a5cc2', '#c23d7a', '#2f8f8f', '#b7791f', '#5c6bc2'];
 export const PERMS = {

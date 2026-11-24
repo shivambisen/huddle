@@ -1,5 +1,5 @@
 // The call screen, modelled on Google Meet.
-import { api, esc, toast, initial } from './lib.js';
+import { api, esc, toast, initial, orb } from './lib.js';
 import { Voice, naturalVoices, naturalVoiceFor, previewNatural, voices as systemVoices } from './voice.js';
 
 const I = {
@@ -153,10 +153,10 @@ export async function viewMeeting($app, pid, settings, onLeave) {
     const chip = a.status === 'working' ? `<div class="gm-chip"><span class="gm-spin"></span>${esc(a.activity && !/^thinking/.test(a.activity) ? a.activity : 'Thinking')}</div>`
       : st.queued.has(id) ? '<div class="gm-chip">✋ Wants to speak</div>'
       : a.status === 'error' ? `<div class="gm-chip err" title="${esc(a.activity)}">Problem: ${esc(a.activity.slice(0, 60))}</div>`
-      : prov && !prov.signedIn ? '<div class="gm-chip err">Not connected</div>' : '';
+      : prov && !prov.signedIn ? `<div class="gm-chip err">${prov.installed ? 'Sign in needed' : 'Not installed'} · see Connections</div>` : '';
     return `<div class="gm-tile agent ${speaking ? 'speaking' : ''} ${st.target === id ? 'pinned' : ''}" data-id="${id}">
       ${chip}
-      <div class="gm-avatar ${speaking ? 'pulse' : ''}" style="background:${r.color}">${initial(r.name)}</div>
+      ${orb(r.provider, order.indexOf(id), { state: speaking ? 'speaking' : a.status === 'working' ? 'working' : a.status === 'error' ? 'error' : '', size: 'tile' })}
       <div class="gm-badge ${speaking ? 'live' : ''}">${speaking ? '<span class="gm-bars"><i></i><i></i><i></i></span>' : ''}</div>
       <div class="gm-hover"><button class="gm-hbtn" data-act="talk" title="${st.target === id ? 'Stop talking only to' : 'Talk only to'} ${esc(r.name)}">${st.target === id ? 'Talking only to them' : 'Talk only to ' + esc(r.name)}</button><button class="gm-hbtn round" data-act="menu" title="Model, effort and voice">${svg('more')}</button></div>
       <div class="gm-label">${esc(r.name)}<span class="gm-sub">${esc(prov?.label || r.provider)} · ${esc(modelLabel(r))} · ${esc(EFFORT_LABEL[effortOf(r)] || effortOf(r))}</span></div>
@@ -187,7 +187,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
     const nv = naturalVoiceFor(nlist, r, order.indexOf(id));
     const m = $('menu');
     m.innerHTML = `
-      <div class="gm-menu-head"><span class="gm-mini" style="background:${r.color}">${initial(r.name)}</span><div><b>${esc(r.name)}</b><div class="gm-muted">${esc(r.title || '')} · ${esc(prov.label || r.provider)}</div></div></div>
+      <div class="gm-menu-head">${orb(r.provider, order.indexOf(id), { size: 'sm' })}<div><b>${esc(r.name)}</b><div class="gm-muted">${esc(r.title || '')} · ${esc(prov.label || r.provider)}</div></div></div>
       <label>Model<select data-k="model">${models.map((x) => `<option value="${esc(x.id)}" ${x.id === (r.model || 'default') ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}</select></label>
       ${efforts.length ? `<label>Effort <span class="gm-muted">lower = faster replies</span><div class="gm-seg">${efforts.map((e) => `<button data-effort="${e}" class="${e === cur ? 'on' : ''}">${EFFORT_LABEL[e] || e}</button>`).join('')}</div></label>` : ''}
       <label>Voice<div class="gm-row"><select data-k="voice">
@@ -226,7 +226,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
     const r = roles[id];
     const toTxt = to ? (to === 'all' ? 'Everyone' : [].concat(to).map(nameOf).join(', ')) : '';
     c.hidden = false;
-    c.innerHTML = `<span class="gm-mini" style="background:${r ? r.color : '#5f6368'}">${initial(nameOf(id))}</span>
+    c.innerHTML = `${r ? orb(r.provider, order.indexOf(id), { state: 'speaking', size: 'xs' }) : `<span class="gm-mini" style="background:#5f6368">${initial(nameOf(id))}</span>`}
       <div><div class="gm-cap-name">${esc(nameOf(id))}${toTxt ? ` <span class="gm-cap-to">→ ${esc(toTxt)}</span>` : ''}${note ? ` <span class="gm-cap-to">${esc(note)}</span>` : ''}</div><div class="gm-cap-text">${esc(text)}${live ? '…' : ''}</div></div>`;
     const pc = pip?.document.getElementById('pip-cap');
     if (pc) pc.innerHTML = `<b>${esc(nameOf(id))}</b> ${esc(text)}${live ? '…' : ''}`;
@@ -314,7 +314,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
       const r = roles[id]; const a = st.agents[id] || {};
       const speaking = id === 'you' ? voice.listening : st.speaking === id;
       const state = id === 'you' ? '' : a.status === 'working' ? '<span class="pip-state">working…</span>' : st.queued.has(id) ? '<span class="pip-state">✋</span>' : '';
-      return `<div class="pip-tile ${speaking ? 'speaking' : ''}"><span class="pip-av" style="background:${r ? r.color : '#5f6368'}">${initial(nameOf(id))}</span>${state}<span class="pip-name">${esc(id === 'you' ? 'You' : r.name)}</span></div>`;
+      return `<div class="pip-tile ${speaking ? 'speaking' : ''}">${r ? orb(r.provider, order.indexOf(id), { state: speaking ? 'speaking' : a.status === 'working' ? 'working' : '', size: 'pip' }) : `<span class="pip-av" style="background:#5f6368">${initial(nameOf(id))}</span>`}${state}<span class="pip-name">${esc(id === 'you' ? 'You' : r.name)}</span></div>`;
     }).join('');
     const v = voice;
     const bar = d.getElementById('pip-bar');
@@ -394,7 +394,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
         ${order.map((id) => {
           const r = roles[id]; const prov = status[r.provider] || {}; const a = st.agents[id] || {};
           return `<div class="gm-person col" data-id="${id}">
-            <div class="gm-row"><span class="gm-mini lg" style="background:${r.color}">${initial(r.name)}</span>
+            <div class="gm-row">${orb(r.provider, order.indexOf(id), { state: a.status === 'working' ? 'working' : '', size: 'sm' })}
               <div class="grow"><b>${esc(r.name)}</b><div class="gm-muted">${a.status === 'working' ? esc(a.activity || 'Working…') : esc(r.title || '')}</div></div>
               ${a.status === 'working' ? `<button class="gm-icon sm" data-stop="${id}" title="Stop this reply">${svg('stop')}</button>` : ''}</div>
             ${appName(r) ? `<button class="gm-link" data-open="${id}">Open their session in ${appName(r)} ↗</button>` : ''}
