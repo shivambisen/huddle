@@ -355,6 +355,7 @@ async function viewLobby(pid) {
   const [p, status] = await Promise.all([api(`/projects/${pid}`), api('/providers')]);
   if (!p.roles.length) { toast('Add a teammate first'); location.hash = `#/p/${pid}`; return; }
   const missing = [...new Set(p.roles.filter((r) => !status[r.provider]?.signedIn).map((r) => status[r.provider]?.label || r.provider))];
+  const folder = await api('/fs/check', { method: 'POST', body: { dir: p.cwd } });
   $app.innerHTML = `
   <div class="page lobby">
     <div class="lobby-left">
@@ -369,6 +370,7 @@ async function viewLobby(pid) {
         <div class="tp-row"><span class="av" style="background:${r.color}">${initial(r.name)}</span>
           <div class="grow"><b>${esc(r.name)}</b><div class="small muted">${esc(r.title || '')}</div></div>
           <span class="pill ${status[r.provider]?.signedIn ? 'ok' : 'no'}">${esc(status[r.provider]?.label || r.provider)}</span></div>`).join('')}</div>
+      ${folder.ok ? '' : `<div class="note small">This team's folder doesn't exist any more: <code>${esc(p.cwd)}</code>. Agents can't work until you <a href="#/p/${pid}">pick another folder</a>.</div>`}
       ${missing.length ? `<div class="note small">${esc(missing.join(', '))} ${missing.length > 1 ? 'aren\'t' : 'isn\'t'} connected, so those teammates can't answer. <a href="#/connections">Connect</a></div>` : ''}
       <div class="tips small muted">
         <b>How to talk to them</b>

@@ -258,6 +258,10 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+// One bad agent or request should never take the whole meeting down.
+process.on('uncaughtException', (e) => console.error('Unexpected error (Huddle keeps running):', e?.stack || e));
+process.on('unhandledRejection', (e) => console.error('Unhandled promise (Huddle keeps running):', e?.stack || e));
+
 server.on('error', (e) => {
   if (e.code !== 'EADDRINUSE') throw e;
   console.error(`Port ${PORT} is already in use. Huddle may already be running at http://localhost:${PORT}\nUse another port with: PORT=4318 npm start`);

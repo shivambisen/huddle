@@ -113,7 +113,8 @@ export class Mic {
 }
 
 export async function transcribe(pcm) {
-  const r = await fetch('/api/stt/transcribe', { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: pcm.buffer });
+  const r = await fetch('/api/stt/transcribe', { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: pcm.buffer })
+    .catch(() => { throw new Error("Can't reach the Huddle server. Is it still running? Start it with: cd ~/huddle && npm start"); });
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || 'Transcription failed');
   return j.text;
