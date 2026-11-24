@@ -86,7 +86,7 @@
     .eyebrow { font-size: 13px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-bottom: 14px; }
     .section-head { max-width: 680px; margin-bottom: 40px; }
     .section-head p { color: var(--muted); font-size: 18px; margin-top: 14px; }
-    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
     .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; }
     .card p { color: var(--muted); font-size: 15px; }
     .icon { width: 40px; height: 40px; border-radius: 12px; background: var(--soft); display: grid; place-items: center; font-size: 19px; margin-bottom: 16px; }
@@ -178,6 +178,7 @@
       <p>Huddle handles the things that make a group call work: who has the floor, who's talking to whom, and who should stay quiet.</p>
     </div>
     <div class="grid">
+      <div class="card reveal"><div class="icon">🧑‍🤝‍🧑</div><h3>Only the people you need</h3><p>Describe the work and Huddle invites just the teammates it needs, each with matching Claude skills. Or start with one all-rounder that asks before bringing anyone in.</p></div>
       <div class="card reveal"><div class="icon">🎯</div><h3>Only the one you name answers</h3><p>Start with a name, or name several. “Everyone” or “Does anyone…” asks the room. Without a name, Huddle works out who you meant from the conversation.</p><p class="quote">“Intern, summarise what we decided.”</p></div>
       <div class="card reveal"><div class="icon">💬</div><h3>Agents think out loud</h3><p>You hear “Sure, let me look at the code” within a couple of seconds, then short progress updates, then the outcome. Details land in the chat, not in your ears.</p></div>
       <div class="card reveal"><div class="icon">✋</div><h3>One voice at a time</h3><p>Others raise a hand and wait their turn. Start talking and whoever is speaking stops. Keep talking, and an agent that hasn't started working waits for you to finish.</p></div>
@@ -194,7 +195,7 @@
       <div class="card reveal"><div class="icon">🎛️</div><h3>Model and effort per teammate</h3><p>Put your Developer on Sonnet and your Intern on Haiku. Change the model or effort mid-call from their tile, and they keep their memory.</p></div>
       <div class="card reveal"><div class="icon">🗣️</div><h3>Natural voices, free</h3><p>Every teammate gets a human-sounding voice from a neural model running on your Mac. Speech-to-text runs locally too, so it works in Brave, Safari and Chrome.</p></div>
       <div class="card reveal"><div class="icon">🪟</div><h3>Picture-in-picture</h3><p>Pop the call out into a small window that floats over your editor, just like Meet. It shows who's speaking and has a mic button.</p></div>
-      <div class="card reveal"><div class="icon">🧾</div><h3>Their work, in Claude Code</h3><p>Every teammate's session is saved in Claude Code or Codex under its own name. Open it from the call to see exactly what they did, or continue there.</p></div>
+      <div class="card reveal"><div class="icon">🧾</div><h3>Part of Claude Code</h3><p>Install the plugin and Huddle starts on its own. A Huddle row sits above your prompt, calls float in the corner, and Claude can ask your team questions for you.</p></div>
       <div class="card reveal"><div class="icon">🔒</div><h3>Private by default</h3><p>Everything runs on your machine: the app, the agents, the voices and your transcripts. Huddle only listens on localhost.</p></div>
     </div>
   </section>

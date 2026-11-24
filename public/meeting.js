@@ -25,10 +25,12 @@ const I = {
 const svg = (n) => `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${I[n]}</svg>`;
 const EFFORT_LABEL = { minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'X-High', max: 'Max' };
 
-export async function viewMeeting($app, pid, settings, onLeave) {
-  const [p, status, nlist, slist] = await Promise.all([api(`/projects/${pid}`), api('/providers'), naturalVoices(), systemVoices()]);
+export async function viewMeeting($app, pid, settings, onLeave, { mini = false } = {}) {
+  const [p, status, nlist, slist, app] = await Promise.all([api(`/projects/${pid}`), api('/providers'), naturalVoices(), systemVoices(), api('/app').catch(() => ({ desktop: false }))]);
   if (!p.roles.length) { location.hash = `#/p/${pid}`; return toast('Add a teammate first.'); }
   document.body.classList.add('in-meeting');
+  document.body.classList.toggle('mini', mini);
+  onLeave(() => document.body.classList.remove('mini'));
   const host = settings.hostName || 'You';
   const roles = Object.fromEntries(p.roles.map((r) => [r.id, r]));
   const order = p.roles.map((r) => r.id);
@@ -57,7 +59,9 @@ export async function viewMeeting($app, pid, settings, onLeave) {
 
   $app.innerHTML = `
   <div class="gm" id="gm">
+    ${mini ? `<div class="gm-drag"><span class="gm-drag-name">${esc(p.name)}</span><button class="gm-icon sm" id="mini-expand" title="Open the full call">⤢</button><button class="gm-icon sm" id="mini-close" title="Close (the call keeps your history)">✕</button></div>` : ''}
     <main class="gm-stage-wrap">
+      <div class="gm-invites" id="invites"></div>
       <div class="gm-stage" id="stage"></div>
       <div class="gm-caption" id="caption" hidden></div>
     </main>
@@ -97,6 +101,8 @@ export async function viewMeeting($app, pid, settings, onLeave) {
       if (m.type === 'speech') voice.speak(m.id, m.text);
       if (m.type === 'routing') { st.routing = true; caption('you', m.text, false, 'Working out who you mean…'); }
       if (m.type === 'draft') { st.drafts[m.id] = m.text; paintDraft(m.id); }
+      if (m.type === 'project') syncPeople(m.project);
+      if (m.type === 'invites') { st.invites = m.invites || []; paintInvites(); if (m.joining) toast(`Bringing in a ${m.joining}…`, 6000); }
       if (m.type === 'role') { Object.assign(roles[m.role.id], m.role); paintTiles(); if (st.panel === 'people') paintPanel(); if (st.menu === m.role.id) openMenu(m.role.id); }
       if (m.type === 'entry') {
         const e = m.entry;
@@ -126,7 +132,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
 
   // ----- tiles -----
   const layout = () => {
-    const n = order.length + 1;
+    const n = order.length + (mini ? 0 : 1);
     const stage = $('stage');
     const W = stage.clientWidth, H = stage.clientHeight;
     let best = { cols: 1, size: 0 };
@@ -164,7 +170,7 @@ export async function viewMeeting($app, pid, settings, onLeave) {
   };
   const paintTiles = () => {
     const stage = $('stage');
-    stage.innerHTML = ['you', ...order].map(tileHtml).join('');
+    stage.innerHTML = (mini ? order : ['you', ...order]).map(tileHtml).join('');
     paintPip();
     if (st.cam) stage.querySelector('video').srcObject = st.cam;
     stage.querySelectorAll('.gm-tile.agent').forEach((t) => {
@@ -261,8 +267,8 @@ export async function viewMeeting($app, pid, settings, onLeave) {
     $('cc').onclick = () => { st.captions = !st.captions; localStorage.setItem('huddle.cc', st.captions ? '1' : '0'); if (!st.captions) $('caption').hidden = true; paintBar(); };
     $('spk').onclick = () => v.setMuted(!v.muted);
     $('skip').onclick = () => v.skip();
-    $('pipbtn').onclick = () => (pip ? closePip() : openPip());
-    $('leave').onclick = () => (location.hash = '#/');
+    $('pipbtn').onclick = () => (app.desktop ? api('/app/mini', { method: 'POST', body: { pid } }) : pip ? closePip() : openPip());
+    $('leave').onclick = () => (mini ? api('/app/close', { method: 'POST', body: {} }) : (location.hash = '#/'));
     $('more').onclick = (e) => {
       const m = $('menu');
       m.innerHTML = `
@@ -335,6 +341,38 @@ export async function viewMeeting($app, pid, settings, onLeave) {
   // Like Meet: when you switch away from the tab during a call, pop out automatically (where the browser allows it).
   try { navigator.mediaSession.setActionHandler('enterpictureinpicture', () => openPip()); } catch {}
 
+  // ----- people joining and leaving mid-call -----
+  function syncPeople(project) {
+    const before = new Set(order);
+    for (const r of project.roles) roles[r.id] = Object.assign(roles[r.id] || {}, r);
+    order.splice(0, order.length, ...project.roles.map((r) => r.id));
+    p.roles = project.roles;
+    const joined = order.filter((id) => !before.has(id));
+    const left = [...before].filter((id) => !order.includes(id));
+    joined.forEach((id) => toast(`${nameOf(id)} joined the call`));
+    left.forEach((id) => toast(`${nameOf(id)} left the call`));
+    if (left.includes(st.target)) st.target = 'auto';
+    $('to').innerHTML = `<option value="auto">Whoever I name</option><option value="all">Everyone</option>${order.map((id) => `<option value="${id}">${esc(nameOf(id))} only</option>`).join('')}`;
+    document.querySelector('[data-panel=people] .gm-count').textContent = order.length + 1;
+    paintTiles();
+    paintPanel();
+  }
+
+  // "Can I bring in a Designer?" cards, answered with a click or "yes, bring them in".
+  function paintInvites() {
+    const box = $('invites');
+    const list = st.invites || [];
+    box.innerHTML = list.map((inv) => `
+      <div class="gm-invite">
+        ${roles[inv.from] ? orb(roles[inv.from].provider, order.indexOf(inv.from), { size: 'xs' }) : ''}
+        <div class="grow"><b>${esc(nameOf(inv.from))}</b> wants to bring in a <b>${esc(inv.job)}</b>${inv.reason ? `<div class="gm-muted">${esc(inv.reason)}</div>` : ''}</div>
+        <button class="gm-pill" data-decline="${inv.id}">Not now</button>
+        <button class="gm-pill primary" data-approve="${inv.id}">Bring them in</button>
+      </div>`).join('');
+    box.querySelectorAll('[data-approve]').forEach((b) => (b.onclick = () => ws.send(JSON.stringify({ type: 'invite-approve', id: b.dataset.approve }))));
+    box.querySelectorAll('[data-decline]').forEach((b) => (b.onclick = () => ws.send(JSON.stringify({ type: 'invite-decline', id: b.dataset.decline }))));
+  }
+
   // ----- side panel: chat / people / info -----
   const fmt = (text) => esc(text).replace(/```[\w-]*\n?([\s\S]*?)```/g, '<pre>$1</pre>').replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
   const msgHtml = (e) => {
@@ -397,12 +435,18 @@ export async function viewMeeting($app, pid, settings, onLeave) {
             <div class="gm-row">${orb(r.provider, order.indexOf(id), { state: a.status === 'working' ? 'working' : '', size: 'sm' })}
               <div class="grow"><b>${esc(r.name)}</b><div class="gm-muted">${a.status === 'working' ? esc(a.activity || 'Working…') : esc(r.title || '')}</div></div>
               ${a.status === 'working' ? `<button class="gm-icon sm" data-stop="${id}" title="Stop this reply">${svg('stop')}</button>` : ''}</div>
-            ${appName(r) ? `<button class="gm-link" data-open="${id}">Open their session in ${appName(r)} ↗</button>` : ''}
+            ${r.skills?.length ? `<div class="gm-skills">${r.skills.map((k) => `<span>${esc(k)}</span>`).join('')}</div>` : ''}
+            <div class="gm-row">${appName(r) ? `<button class="gm-link" data-open="${id}">Open their session in ${appName(r)} ↗</button>` : ''}<button class="gm-link danger" data-dismiss="${id}">Drop off</button></div>
             <div class="gm-row">
               <select data-k="model" title="Model">${(prov.models?.length ? prov.models : [{ id: 'default', label: 'Default' }]).map((x) => `<option value="${esc(x.id)}" ${x.id === (r.model || 'default') ? 'selected' : ''}>${esc(prov.label || '')} ${esc(x.label)}</option>`).join('')}</select>
               ${prov.efforts?.length ? `<select data-k="effort" title="Effort">${prov.efforts.map((e) => `<option value="${e}" ${e === effortOf(r) ? 'selected' : ''}>${EFFORT_LABEL[e] || e} effort</option>`).join('')}</select>` : ''}
             </div></div>`;
-        }).join('')}`;
+        }).join('')}
+        <form class="gm-bring" id="bring"><div class="gm-group">Bring someone in</div>
+          <div class="gm-input"><input id="bring-job" placeholder="e.g. Designer, Security reviewer" autocomplete="off" /><button class="gm-icon" title="Bring in">${svg('send')}</button></div>
+          <div class="gm-muted">Huddle sets them up with skills for the job. Or just say “bring in a designer”.</div></form>`;
+      body.querySelectorAll('[data-dismiss]').forEach((b) => (b.onclick = () => ws.send(JSON.stringify({ type: 'dismiss', id: b.dataset.dismiss }))));
+      $('bring').onsubmit = (e) => { e.preventDefault(); const job = $('bring-job').value.trim(); if (!job) return; ws.send(JSON.stringify({ type: 'bring-in', job })); $('bring-job').value = ''; toast(`Bringing in a ${job}…`, 6000); };
       body.querySelectorAll('.gm-person[data-id] select').forEach((s) => (s.onchange = () => { const id = s.closest('[data-id]').dataset.id; setRole(id, { [s.dataset.k]: s.value }); paintTiles(); toast(`${nameOf(id)} updated. Applies from their next reply.`); }));
       body.querySelectorAll('[data-stop]').forEach((b) => (b.onclick = () => ws.send(JSON.stringify({ type: 'stop', id: b.dataset.stop }))));
       body.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => openSession(b.dataset.open)));
@@ -422,7 +466,11 @@ export async function viewMeeting($app, pid, settings, onLeave) {
   document.querySelectorAll('[data-panel]').forEach((b) => (b.onclick = () => { st.panel = st.panel === b.dataset.panel ? null : b.dataset.panel; localStorage.setItem('huddle.panel', st.panel || ''); paintPanel(); }));
   $('panel-close').onclick = () => { st.panel = null; localStorage.setItem('huddle.panel', ''); paintPanel(); };
   $('compose').onsubmit = (e) => { e.preventDefault(); send($('input').value); $('input').value = ''; };
-  if (matchMedia('(max-width: 860px)').matches) st.panel = null;
+  if (mini || matchMedia('(max-width: 860px)').matches) st.panel = null;
+  if (mini) {
+    $('mini-expand').onclick = () => api('/app/expand', { method: 'POST', body: { pid } });
+    $('mini-close').onclick = () => api('/app/close', { method: 'POST', body: {} });
+  }
 
   paintBar();
   paintPanel();

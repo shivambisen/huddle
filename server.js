@@ -8,6 +8,8 @@ import { allStatus, providerStatus, openLogin, install, testProvider, openSessio
 import { sttStatus, warm, transcribe } from './lib/stt.js';
 import { NATURAL_VOICES, ttsStatus, warmTts, synth, sentences } from './lib/tts.js';
 import { Meeting } from './lib/meeting.js';
+import { proposeTeam, assignProviders, ALL_ROUNDER } from './lib/casting.js';
+import { equipRole, catalog, ensureLibrary } from './lib/skills.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DATA = process.env.HUDDLE_DATA ? path.resolve(process.env.HUDDLE_DATA) : path.join(ROOT, 'data');
@@ -90,6 +92,10 @@ function room(project) {
       for (const ws of sockets) if (ws.readyState === 1) ws.send(s);
     }, {
       smartAddressing: () => settings.smartAddressing !== false,
+      providerStatus: () => allStatus(),
+      onProjectChange: () => saveProjects(),
+      equip: (role) => equipRole(role, DATA).catch(() => {}),
+      skillCatalog: () => catalog(DATA),
       // Render each spoken line the moment it's written, so audio is ready when the agent gets the floor.
       onSpeech: (proj, roleId, text) => {
         if (settings.speech.voices === 'system') return;
@@ -136,6 +142,39 @@ async function apiRoute(req, res, parts) {
 
   if (a === 'templates') return send(res, 200, TEMPLATES);
 
+  // The desktop app (if Huddle runs inside it) handles the floating mini call window.
+  if (a === 'app') {
+    const desk = globalThis.huddleApp;
+    if (!b && M === 'GET') return send(res, 200, { desktop: !!desk });
+    if (!desk) return send(res, 404, { error: 'Only in the Huddle desktop app' });
+    const { pid } = M === 'POST' ? await body(req) : {};
+    if (pid && !/^[\w-]+$/.test(pid)) return send(res, 400, { error: 'Bad team id' });
+    if (b === 'mini' && M === 'POST') { desk.mini(pid); return send(res, 200, { ok: true }); }
+    if (b === 'expand' && M === 'POST') { desk.expand(pid); return send(res, 200, { ok: true }); }
+    if (b === 'close' && M === 'POST') { desk.closeMini(); return send(res, 200, { ok: true }); }
+  }
+  if (a === 'skills' && M === 'GET') return send(res, 200, await catalog(DATA));
+
+  // "Describe what you're doing" -> the smallest team that fits (one quick model call, not a lead).
+  if (a === 'teams' && b === 'propose' && M === 'POST') {
+    const { description, cwd } = await body(req);
+    if (!String(description || '').trim()) return send(res, 400, { error: 'Describe the work first' });
+    const skills = await catalog(DATA).catch(() => []);
+    return send(res, 200, await proposeTeam({ description, status: await allStatus(), cwd: cwd && fs.existsSync(cwd) ? cwd : DATA, skills }));
+  }
+
+  // Claude Code's Huddle plugin: get going without ever opening Huddle's setup screens.
+  if (a === 'quickstart' && M === 'POST') {
+    const { cwd, hostName } = await body(req);
+    if (!settings.onboarded || (!settings.hostName && hostName)) {
+      settings = { ...settings, onboarded: true, hostName: settings.hostName || String(hostName || '').split(' ')[0] || 'You' };
+      saveSettings();
+    }
+    const dir = String(cwd || '');
+    const team = projects.find((p) => p.cwd === dir) || projects.find((p) => dir.startsWith(p.cwd + path.sep)) || null;
+    return send(res, 200, { host: settings.hostName, team });
+  }
+
   if (a === 'claude-code') {
     if (!b && M === 'GET') return send(res, 200, await claudeCodePluginStatus());
     if (b === 'install' && M === 'POST') return send(res, 200, await installClaudeCodePlugin());
@@ -153,6 +192,8 @@ async function apiRoute(req, res, parts) {
         live: !!r?.sockets.size,
         lastActivity: t.at(-1)?.ts || p.createdAt || 0,
         joinUrl: `http://localhost:${PORT}/#/p/${p.id}/meet`,
+        mode: p.mode || 'custom',
+        invites: (r?.meeting.invites || []).map((v) => ({ id: v.id, from: nameOf(v.from), job: v.job, reason: v.reason })),
         agents: p.roles.map((x) => ({ id: x.id, name: x.name, title: x.title || '', provider: x.provider, model: x.model || 'default', status: snap?.agents[x.id]?.status || 'idle', activity: snap?.agents[x.id]?.activity || '' })),
         recent: t.slice(-8).map((e) => ({ from: nameOf(e.from), to: e.to === 'all' ? 'Everyone' : [].concat(e.to).map(nameOf).join(', '), text: String(e.say || e.text).slice(0, 280), ts: e.ts })),
       };
@@ -202,9 +243,27 @@ async function apiRoute(req, res, parts) {
 
   if (a === 'projects') {
     if (!b && M === 'GET') return send(res, 200, projects);
-    if (!b && M === 'POST') { const p = newProject(await body(req)); projects.push(p); saveProjects(); return send(res, 200, p); }
+    if (!b && M === 'POST') {
+      const x = await body(req);
+      if (x.mode === 'allrounder' && !x.roles?.length) x.roles = assignProviders([{ ...ALL_ROUNDER, color: '#c2643d' }], await allStatus());
+      if (!x.name && x.cwd) x.name = path.basename(x.cwd);
+      const p = newProject(x);
+      p.mode = x.mode || 'custom';
+      projects.push(p);
+      saveProjects();
+      await Promise.all(p.roles.map((r) => equipRole(r, DATA).catch(() => {})));
+      saveProjects();
+      return send(res, 200, p);
+    }
     const p = projects.find((x) => x.id === b);
     if (!p) return send(res, 404, { error: 'No such project' });
+    // Answer "can I bring someone in?" from outside the call (Claude Code's Huddle panel).
+    if (c === 'invites' && parts[4] && ['approve', 'decline'].includes(parts[5]) && M === 'POST') {
+      const meeting = room(p).meeting;
+      if (parts[5] === 'approve') meeting.approveInvite(parts[4]).catch(() => {});
+      else meeting.declineInvite(parts[4]);
+      return send(res, 200, { ok: true });
+    }
     // Talk to the team without joining the call (Claude Code's /huddle uses this).
     if (c === 'say' && M === 'POST') {
       const { text, to } = await body(req);
@@ -228,6 +287,7 @@ async function apiRoute(req, res, parts) {
       const x = await body(req);
       for (const k of ['name', 'cwd', 'handoffs', 'leadId']) if (k in x) p[k] = x[k];
       if (Array.isArray(x.roles)) p.roles = x.roles.map((r) => ({ ...r, id: r.id || id() }));
+      await Promise.all(p.roles.map((r) => equipRole(r, DATA).catch(() => {})));
       if (!p.roles.some((r) => r.id === p.leadId)) p.leadId = p.roles[0]?.id || null;
       saveProjects();
       meetings.get(p.id)?.meeting.syncRoles(p);
@@ -277,12 +337,17 @@ wss.on('connection', (ws, req) => {
   clearTimeout(r.idle);
   r.sockets.add(ws);
   ws.send(JSON.stringify({ type: 'state', ...r.meeting.snapshot() }));
+  if (r.meeting.invites.length) ws.send(JSON.stringify({ type: 'invites', invites: r.meeting.invites }));
   r.meeting.warm(); // open each Claude agent's process now, not on the first question
   ws.on('message', (m) => {
     let x; try { x = JSON.parse(m); } catch { return; }
     if (x.type === 'say') r.meeting.say(x).catch((e) => console.error('say failed:', e.message));
     if (x.type === 'stop') r.meeting.stop(x.id);
     if (x.type === 'clear') r.meeting.clear();
+    if (x.type === 'invite-approve') r.meeting.approveInvite(x.id).catch((e) => console.error('invite failed:', e.message));
+    if (x.type === 'invite-decline') r.meeting.declineInvite(x.id);
+    if (x.type === 'dismiss') r.meeting.dismiss(x.id);
+    if (x.type === 'bring-in' && String(x.job || '').trim()) r.meeting.bringIn(String(x.job).trim().slice(0, 40), String(x.reason || 'the host asked for them').slice(0, 200)).catch((e) => console.error('bring-in failed:', e.message));
     if (x.type === 'role') {
       // Change a teammate's model / effort / voice / permissions mid-call.
       const role = project.roles.find((q) => q.id === x.id);
@@ -319,6 +384,7 @@ export const ready = new Promise((resolve, reject) => {
     console.log(`Huddle running at http://localhost:${PORT}`);
     if (settings.onboarded && settings.speech.engine === 'whisper') warm(MODEL_DIR, settings.speech.quality).catch(() => {});
     if (settings.onboarded && settings.speech.voices !== 'system') warmTts(MODEL_DIR).catch(() => {});
+  ensureLibrary(DATA).catch((e) => console.error('Skills library:', e.message));
     resolve({ port: PORT, url: `http://localhost:${PORT}` });
   });
 });

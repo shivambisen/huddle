@@ -1,7 +1,7 @@
 {
   "name": "huddle",
-  "version": "0.1.0",
-  "description": "A Huddle button in Claude Code: see your AI team's call, join it, and message the team without leaving your session.",
+  "version": "0.2.0",
+  "description": "Huddle as part of Claude Code: your AI team's call next to every session. Starts the Huddle app quietly, starts teams, joins calls in a floating window, and lets Claude ask the team.",
   "types": "./types/index.d.ts",
   "author": {
     "name": "Huddle"

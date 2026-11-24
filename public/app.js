@@ -18,8 +18,10 @@ async function render() {
   try {
     if (a === 'welcome') return await viewWelcome(Number(b) || 1);
     if (a === 'connections') return await viewConnections();
+    if (a === 'new') return await viewNewTeam();
     if (a === 'settings') return await viewSettings();
     if (a === 'p' && c === 'meet') return await viewMeeting($app, b, settings, onLeave);
+    if (a === 'p' && c === 'mini') return await viewMeeting($app, b, settings, onLeave, { mini: true });
     if (a === 'p' && c === 'lobby') return await viewLobby(b);
     if (a === 'p' && b) return await viewProject(b);
     return await viewHome();
@@ -95,64 +97,94 @@ async function viewWelcome(step) {
   }
 
   if (step === 4) {
-    const [templates, status] = await Promise.all([api('/templates'), api('/providers')]);
-    const conn = connected(status);
-    if (!conn.length) return go(2);
-    const st = { template: 'product', name: '', cwd: '', roles: [] };
-    const assign = (tpl) => templates[tpl].roles.map((r, i) => {
-      const prov = r.prefer.find((p) => status[p]?.signedIn) || conn[0].id;
-      const { prefer, ...rest } = r;
-      return { ...rest, provider: prov, ...tune(prov, r), id: Math.random().toString(36).slice(2, 10), color: r.color || COLORS[i % COLORS.length] };
-    });
-    st.roles = assign(st.template);
-
-    const paint = () => {
-      $app.innerHTML = shell(`
-        <h2>Set up your first team</h2>
-        <p class="lead">A project is a folder your agents work in, plus the people on the call. You can change everything later.</p>
-        <div class="fields two">
-          <label class="field">Project name<input type="text" id="pname" placeholder="e.g. Website relaunch" value="${esc(st.name)}" /></label>
-          <label class="field">Folder <span class="hint">Where agents read and write files</span>
-            <div class="row nowrap"><input type="text" id="pcwd" placeholder="~/projects/website" value="${esc(st.cwd)}" /></div>
-            <span class="small" id="cwd-msg"></span></label>
-        </div>
-        <h3 class="sub">Who's on the team?</h3>
-        <div class="tpl-grid">${Object.entries(templates).map(([k, t]) => `
-          <button class="tpl ${k === st.template ? 'on' : ''}" data-tpl="${k}"><b>${esc(t.label)}</b><span>${esc(t.blurb)}</span></button>`).join('')}</div>
-        <div class="team-preview">${st.roles.map((r, i) => `
-          <div class="tp-row">
-            ${orb(r.provider, i, { size: 'sm' })}
-            <div class="grow"><b>${esc(r.name)}</b><div class="small muted">${esc(r.title)} · ${esc(PERMS[r.permission].label.toLowerCase())}</div></div>
-            <select data-i="${i}" class="sel-sm">${conn.map((p) => `<option value="${p.id}" ${p.id === r.provider ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>
-          </div>`).join('')}</div>`,
-        `<button class="btn" id="back">← Back</button><button class="btn primary lg" id="create">Create team →</button>`);
-      const $ = (id) => document.getElementById(id);
-      $('pname').oninput = (e) => (st.name = e.target.value);
-      $('pcwd').oninput = (e) => { st.cwd = e.target.value; $('cwd-msg').textContent = ''; };
-      $('pcwd').onblur = checkDir;
-      $app.querySelectorAll('[data-tpl]').forEach((b) => (b.onclick = () => { st.template = b.dataset.tpl; st.roles = assign(st.template); paint(); }));
-      $app.querySelectorAll('select[data-i]').forEach((s) => (s.onchange = () => { const r = st.roles[s.dataset.i]; r.provider = s.value; Object.assign(r, tune(s.value, r)); }));
-      $('back').onclick = () => go(3);
-      $('create').onclick = create;
-    };
-    async function checkDir() {
-      if (!st.cwd.trim()) return true;
-      const r = await api('/fs/check', { method: 'POST', body: { dir: st.cwd } });
-      const msg = document.getElementById('cwd-msg');
-      if (r.ok) { msg.innerHTML = '<span style="color:var(--ok)">✓ Folder found</span>'; return r.path; }
-      msg.innerHTML = `<span style="color:var(--warn)">That folder doesn't exist yet. It will be created.</span>`;
-      return null;
-    }
-    async function create() {
-      if (!st.name.trim()) return toast('Give the project a name');
-      let dir = st.cwd.trim() || `~/huddle-projects/${st.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-      const r = await api('/fs/check', { method: 'POST', body: { dir, create: true } });
-      const p = await api('/projects', { method: 'POST', body: { name: st.name.trim(), cwd: r.path, roles: st.roles } });
-      await saveSettings({ onboarded: true });
-      location.hash = `#/p/${p.id}/lobby`;
-    }
-    paint();
+    await newTeamFlow((inner, foot) => { $app.innerHTML = shell(inner, foot); }, { back: () => go(3), first: true });
   }
+}
+
+// ======================= new team: three ways to start =======================
+// 1. Describe the work -> only the people it needs (one quick model call, not a lead).
+// 2. Just an all-rounder -> it asks to bring specialists in when it needs them.
+// 3. Build it myself -> pick people by hand.
+async function newTeamFlow(render, { back, first = false } = {}) {
+  const status = await api('/providers');
+  const conn = connected(status);
+  if (!conn.length) { toast('Connect Claude or ChatGPT first'); location.hash = first ? '#/welcome/2' : '#/connections'; return; }
+  const st = { mode: 'describe', name: '', cwd: '', description: '', proposal: null, busy: false, error: '' };
+  const MODES = [
+    ['describe', 'Describe the work', 'Say what you’re doing and Huddle invites only the people it needs.'],
+    ['allrounder', 'Just an all-rounder', 'Start with one capable teammate. It asks to bring in specialists when it needs them.'],
+    ['custom', 'Build it myself', 'Pick each teammate, their AI, model and skills by hand.'],
+  ];
+  const paint = () => {
+    const pr = st.proposal;
+    render(`
+      <h2>${first ? 'Start your first team' : 'New team'}</h2>
+      <p class="lead">A team works in one folder. Pick how it comes together; you can bring people in or let them drop off during any call.</p>
+      <div class="tpl-grid">${MODES.map(([k, t, d]) => `<button class="tpl ${k === st.mode ? 'on' : ''}" data-mode="${k}"><b>${t}</b><span>${d}</span></button>`).join('')}</div>
+      <div class="fields two" style="margin-top:20px">
+        <label class="field">Team name<input type="text" id="pname" placeholder="e.g. Website relaunch" value="${esc(st.name)}" /></label>
+        <label class="field">Folder <span class="hint">Where they read and write files</span><input type="text" id="pcwd" placeholder="~/projects/website" value="${esc(st.cwd)}" /></label>
+      </div>
+      ${st.mode === 'describe' ? `
+        <label class="field" style="margin-top:16px">What are you working on?
+          <textarea id="desc" placeholder="e.g. A 2D drafting tool in the browser, just for me: lines, circles, snapping, export to DXF.">${esc(st.description)}</textarea></label>
+        ${st.error ? `<div class="test-result bad" style="margin-top:10px">✕ ${esc(st.error)}</div>` : ''}
+        ${pr ? `<h3 class="sub">${esc(pr.summary || 'Your team')}</h3>
+          <div class="team-preview">${pr.roles.map((r, i) => `
+            <div class="tp-row">${orb(r.provider, i, { size: 'sm' })}
+              <div class="grow"><b>${esc(r.name)}</b> <span class="small muted">${esc(r.title)}</span>
+                <div class="small muted">${esc(r.why || '')}</div>
+                ${r.skills?.length ? `<div class="chips">${r.skills.map((k) => `<span>${esc(k)}</span>`).join('')}</div>` : ''}</div>
+              <select data-i="${i}" class="sel-sm">${conn.map((p) => `<option value="${p.id}" ${p.id === r.provider ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>
+              <button class="btn sm ghost" data-del="${i}" title="Not needed">✕</button>
+            </div>`).join('')}</div>` : ''}` : ''}`,
+      `<button class="btn" id="back">← Back</button><div class="row">
+        ${st.mode === 'describe' && pr ? '<button class="btn" id="again">Describe again</button>' : ''}
+        <button class="btn primary lg" id="go" ${st.busy ? 'disabled' : ''}>${st.busy ? '<span class="spin dark"></span> Working out who you need…'
+          : st.mode === 'describe' ? (pr ? 'Start the call →' : 'Assemble the team →') : st.mode === 'allrounder' ? 'Start the call →' : 'Create and add people →'}</button></div>`);
+    const $ = (id) => document.getElementById(id);
+    document.querySelectorAll('[data-mode]').forEach((b) => (b.onclick = () => { st.mode = b.dataset.mode; paint(); }));
+    $('pname').oninput = (e) => (st.name = e.target.value);
+    $('pcwd').oninput = (e) => (st.cwd = e.target.value);
+    if ($('desc')) $('desc').oninput = (e) => (st.description = e.target.value);
+    document.querySelectorAll('select[data-i]').forEach((x) => (x.onchange = () => { const r = st.proposal.roles[x.dataset.i]; r.provider = x.value; Object.assign(r, tune(x.value, r)); paint(); }));
+    document.querySelectorAll('[data-del]').forEach((x) => (x.onclick = () => { st.proposal.roles.splice(+x.dataset.del, 1); if (!st.proposal.roles.length) st.proposal = null; paint(); }));
+    $('back').onclick = back || (() => history.back());
+    if ($('again')) $('again').onclick = () => { st.proposal = null; paint(); };
+    $('go').onclick = go;
+  };
+  const folder = async () => {
+    const name = st.name.trim() || (st.cwd.trim() ? st.cwd.trim().split('/').filter(Boolean).pop() : '');
+    if (!name) throw new Error('Give the team a name (or pick a folder)');
+    const dir = st.cwd.trim() || `~/huddle-projects/${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const r = await api('/fs/check', { method: 'POST', body: { dir, create: true } });
+    return { name, cwd: r.path };
+  };
+  async function go() {
+    st.error = '';
+    try {
+      if (st.mode === 'describe' && !st.proposal) {
+        if (!st.description.trim()) return toast('Describe the work first');
+        st.busy = true; paint();
+        const where = st.cwd.trim() ? await api('/fs/check', { method: 'POST', body: { dir: st.cwd } }).catch(() => null) : null;
+        st.proposal = await api('/teams/propose', { method: 'POST', body: { description: st.description, cwd: where?.ok ? where.path : undefined } });
+        if (!st.name.trim()) st.name = st.description.split(/[.,:;\n]/)[0].split(' ').slice(0, 4).join(' ');
+        st.busy = false; paint(); return;
+      }
+      st.busy = true; paint();
+      const f = await folder();
+      const body = st.mode === 'describe' ? { ...f, mode: 'assembled', roles: st.proposal.roles.map(({ why, ...r }) => r) }
+        : st.mode === 'allrounder' ? { ...f, mode: 'allrounder' } : { ...f, mode: 'custom', roles: [] };
+      const p = await api('/projects', { method: 'POST', body });
+      if (first) await saveSettings({ onboarded: true });
+      location.hash = st.mode === 'custom' ? `#/p/${p.id}` : `#/p/${p.id}/lobby`;
+    } catch (e) { st.busy = false; st.error = e.message; toast(e.message, 5000); paint(); }
+  }
+  paint();
+}
+
+async function viewNewTeam() {
+  await newTeamFlow((inner, foot) => { $app.innerHTML = `<div class="page narrow">${inner}<div class="wizard-foot">${foot}</div></div>`; }, { back: () => (location.hash = '#/') });
 }
 
 // ======================= home =======================
@@ -177,13 +209,9 @@ async function viewHome() {
         </div>`).join('') || '<p class="muted">No teams yet.</p>'}
     </div>
   </div>`;
-  document.getElementById('new').onclick = async () => {
+  document.getElementById('new').onclick = () => {
     if (!conn.length) { toast('Connect Claude or ChatGPT first'); location.hash = '#/connections'; return; }
-    const name = prompt('Team name');
-    if (!name) return;
-    const r = await api('/fs/check', { method: 'POST', body: { dir: `~/huddle-projects/${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`, create: true } });
-    const p = await api('/projects', { method: 'POST', body: { name, cwd: r.path, roles: [] } });
-    location.hash = `#/p/${p.id}`;
+    location.hash = '#/new';
   };
 }
 
@@ -233,7 +261,7 @@ async function viewSettings() {
 
 // ======================= team setup =======================
 async function viewProject(pid) {
-  const [p, status, vlist, nlist] = await Promise.all([api(`/projects/${pid}`), api('/providers'), voices(), naturalVoices()]);
+  const [p, status, vlist, nlist, skillLib] = await Promise.all([api(`/projects/${pid}`), api('/providers'), voices(), naturalVoices(), api('/skills').catch(() => [])]);
   const draft = structuredClone(p);
   const tests = {};
   let dirty = false;
@@ -273,6 +301,9 @@ async function viewProject(pid) {
         <label class="field">Also answers to <span class="hint">Nicknames, comma-separated</span><input type="text" data-k="aliases" value="${esc((r.aliases || []).join(', '))}" placeholder="dev, coder" /></label>
         <label class="field">Colour<input type="color" data-k="color" value="${r.color}" class="color" /></label>
       </div>
+      ${r.provider === 'claude' ? `<div class="field">Skills <span class="hint">From Anthropic's skills library, loaded only into this teammate's Claude Code session</span>
+        <div class="chips big">${(r.skills || []).map((k) => `<span>${esc(k)} <button data-unskill="${esc(k)}" title="Remove">✕</button></span>`).join('') || '<span class="muted">Picked automatically when you save</span>'}
+          <select data-addskill class="sel-sm"><option value="">+ Add a skill</option>${skillLib.filter((k) => !(r.skills || []).includes(k.id)).map((k) => `<option value="${esc(k.id)}" title="${esc(k.description)}">${esc(k.id)}</option>`).join('')}</select></div></div>` : ''}
       <label class="field">Instructions <span class="hint">How this teammate should think and work. Meeting manners (answer only when called on, short spoken summary) are added for you.</span>
         <textarea data-k="prompt" placeholder="e.g. You research competitors and summarise findings with sources.">${esc(r.prompt)}</textarea></label>
     </div>`;
@@ -312,6 +343,9 @@ async function viewProject(pid) {
           if (k === 'name') card.querySelector('h3').textContent = el.value || 'New teammate';
         };
       });
+      card.querySelectorAll('[data-unskill]').forEach((b) => (b.onclick = () => { r.skills = (r.skills || []).filter((k) => k !== b.dataset.unskill); touch(); paint(); }));
+      const add = card.querySelector('[data-addskill]');
+      if (add) add.onchange = () => { if (add.value) { r.skills = [...(r.skills || []), add.value]; touch(); paint(); } };
       card.querySelector('[data-act=del]').onclick = () => { if (confirm(`Remove ${r.name || 'this teammate'}?`)) { draft.roles.splice(card.dataset.i, 1); touch(); paint(); } };
       const lead = card.querySelector('[data-act=lead]');
       if (lead) lead.onclick = () => { draft.leadId = r.id; touch(); paint(); };

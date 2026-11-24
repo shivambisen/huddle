@@ -16,18 +16,35 @@ npm run app        # the desktop app, from source
 
 The first run walks you through setup: your name → connect your AI accounts → mic and voice check → create your first team → pre-join lobby → call.
 
-## Huddle inside Claude Code
+## Huddle inside Claude Code (the easiest way in)
 
-The `claude-plugin/` folder is a Claude Code plugin. It adds a **Huddle row above the prompt** (your team for the current folder, what they're doing, *Join call*), a **live Huddle panel** (who's working, recent lines, a message box), a **status line** entry during calls, and **`/huddle`** (`/huddle Developer, run the tests` messages the team).
-
-Install it from Huddle (Connections → **Add to Claude Code**), or:
+Install the Huddle app once, then the plugin:
 
 ```bash
 claude plugin marketplace add shivambisen/huddle
 claude plugin install huddle@huddle
 ```
 
-Each agent's own Claude Code / Codex session is also saved under a name like "Huddle · Team · Developer"; open it from the agent's menu in a call.
+From then on you don't open Huddle yourself:
+
+- **It starts by itself.** Each Claude Code session wakes the Huddle app in the background (no window, no Dock icon; a small ◐ in the menu bar / tray).
+- **A Huddle row above the prompt** shows this folder's team and what they're doing, with *Join call*, and *Bring them in* when someone asks for help.
+- **The Huddle panel** (`/huddle`) starts a team for the folder, shows who's working and what was said, and has a message box.
+- **Calls float.** *Join call* opens a small always-on-top window in the corner of the screen, like Meet's floating call. Expand it for the full call; minimise the full call to float it again.
+- **Claude can ask the team.** The plugin gives Claude a `huddle` tool: say *"ask the researcher which DXF libraries are maintained"* in a normal chat and Claude asks, waits for the answer, and uses it.
+- **`/huddle Developer, run the tests`** messages the team without joining.
+
+Each agent's own Claude Code / Codex session is saved under a name like "Huddle · Team · Developer"; open it from the agent's menu in a call.
+
+## Teams: three ways to start, no manager
+
+1. **Describe the work.** One quick, cheap model call (Haiku on your Claude login, or ChatGPT) proposes the *smallest* team that fits, often just one person, with a reason for each. You approve, change or remove anyone.
+2. **Just an all-rounder.** One capable teammate. When the work needs a specialist it asks (*"✋ can I bring in a Designer?"*) and you approve with a click or *"yes, bring them in"*.
+3. **Build it myself.** Pick each teammate, AI, model, effort, voice and skills by hand.
+
+During any call: *"bring in a security reviewer"* adds someone (named after the job, so you can call on them), *"Reviewer, you can drop off"* removes them (they keep their memory on the bench for next time). Nobody leads or manages: everyone talks to you directly, and the casting step is a one-off invite, not a participant.
+
+**Skills:** each Claude teammate gets up to three matching skills from [Anthropic's skills library](https://github.com/anthropics/skills) (frontend-design and webapp-testing for a developer, docx and doc-coauthoring for a writer, …), chosen when the team is assembled. They load only into that teammate's Claude Code session, never into your own setup. Add or remove them on the team page.
 
 ## Building the apps
 
