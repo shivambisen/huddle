@@ -1,33 +1,26 @@
-import { Voice } from './voice.js';
+import { api, esc, toast, initial, COLORS, PERMS, connectCards, micCheck, providerMark } from './lib.js';
+import { voices, naturalVoices, naturalVoiceFor, previewNatural } from './voice.js';
+import { viewMeeting } from './meeting.js';
 
 const $app = document.getElementById('app');
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const api = async (path, opts = {}) => {
-  const r = await fetch('/api' + path, { ...opts, headers: { 'content-type': 'application/json' }, body: opts.body && JSON.stringify(opts.body) });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error || r.statusText);
-  return j;
-};
-const toast = (msg, ms = 2600) => {
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.hidden = false;
-  clearTimeout(toast.t); toast.t = setTimeout(() => (t.hidden = true), ms);
-};
-const initial = (s) => (s || '?').trim()[0].toUpperCase();
-const COLORS = ['#c2643d', '#3d7ac2', '#3d9c6a', '#8a5cc2', '#c23d7a', '#2f8f8f', '#b7791f', '#5c6bc2'];
-const PERMS = { plan: 'Read-only (plan)', acceptEdits: 'Can edit files', bypassPermissions: 'Full autonomy (shell too)' };
+let settings = null;
+let cleanup = [];
+const onLeave = (fn) => cleanup.push(fn);
 
-let providers = null;
-const loadProviders = async (force) => (providers = !force && providers ? providers : await api('/providers'));
-
-let cleanup = null;
 async function render() {
-  cleanup?.(); cleanup = null;
-  document.body.classList.remove('in-meeting');
+  cleanup.forEach((f) => { try { f(); } catch {} });
+  cleanup = [];
+  document.body.classList.remove('in-meeting', 'wizard');
+  settings ||= await api('/settings');
   const [, a, b, c] = location.hash.split('/');
+  if (!settings.onboarded && a !== 'welcome') { location.hash = '#/welcome/1'; return; }
+  document.querySelectorAll('.nav nav a').forEach((l) => l.classList.toggle('on', l.getAttribute('href') === `#/${a || ''}`));
   try {
+    if (a === 'welcome') return await viewWelcome(Number(b) || 1);
     if (a === 'connections') return await viewConnections();
-    if (a === 'p' && c === 'meet') return await viewMeeting(b);
+    if (a === 'settings') return await viewSettings();
+    if (a === 'p' && c === 'meet') return await viewMeeting($app, b, settings, onLeave);
+    if (a === 'p' && c === 'lobby') return await viewLobby(b);
     if (a === 'p' && b) return await viewProject(b);
     return await viewHome();
   } catch (e) {
@@ -37,107 +30,238 @@ async function render() {
 window.addEventListener('hashchange', render);
 render();
 
-// ---------------- home ----------------
+const saveSettings = async (x) => (settings = await api('/settings', { method: 'PUT', body: x }));
+const connected = (status) => Object.values(status || {}).filter((p) => p.signedIn);
+
+// ======================= onboarding =======================
+const STEPS = ['You', 'Connect AI', 'Voice', 'Your team'];
+async function viewWelcome(step) {
+  document.body.classList.add('wizard');
+  const progress = `<ol class="steps">${STEPS.map((s, i) => `<li class="${i + 1 === step ? 'on' : i + 1 < step ? 'done' : ''}"><span>${i + 1 < step ? '✓' : i + 1}</span>${s}</li>`).join('')}</ol>`;
+  const shell = (inner, foot) => `<div class="page narrow">${progress}<div class="wizard-body">${inner}</div><div class="wizard-foot">${foot}</div></div>`;
+  const go = (n) => (location.hash = `#/welcome/${n}`);
+
+  if (step === 1) {
+    $app.innerHTML = shell(`
+      <h1>Your AI team,<br/><em>on one call.</em></h1>
+      <p class="lead">Huddle puts your AI agents in a meeting room. Give each one a job, talk to them out loud, and only the one you call on answers. It runs on the Claude or ChatGPT plan you already have: no API keys, nothing to pay us.</p>
+      <label class="field big">What should your team call you?<input type="text" id="name" placeholder="Your first name" value="${esc(settings.hostName)}" autofocus /></label>`,
+      `<span></span><button class="btn primary lg" id="next">Continue →</button>`);
+    const next = async () => {
+      const name = document.getElementById('name').value.trim();
+      if (!name) return toast('Tell us your name first');
+      await saveSettings({ hostName: name });
+      go(2);
+    };
+    document.getElementById('next').onclick = next;
+    document.getElementById('name').onkeydown = (e) => e.key === 'Enter' && next();
+    return;
+  }
+
+  if (step === 2) {
+    $app.innerHTML = shell(`
+      <h2>Connect your AI</h2>
+      <p class="lead">Sign in with the accounts you already pay for. Huddle drives the official Claude Code and Codex tools on this computer, so it uses your plan and never sees a password or key. Connect at least one.</p>
+      <div class="stack" id="cards"></div>`,
+      `<button class="btn" id="back">← Back</button><button class="btn primary lg" id="next" disabled>Continue →</button>`);
+    const cards = connectCards(document.getElementById('cards'), {
+      onChange: (s) => { const n = connected(s).length; const b = document.getElementById('next'); b.disabled = !n; b.textContent = n ? `Continue with ${n} connected →` : 'Connect one to continue'; },
+    });
+    onLeave(cards.destroy);
+    document.getElementById('back').onclick = () => go(1);
+    document.getElementById('next').onclick = () => go(3);
+    return;
+  }
+
+  if (step === 3) {
+    $app.innerHTML = shell(`
+      <h2>Check your voice</h2>
+      <p class="lead">Speech is free and stays on this computer: a local Whisper model turns your voice into text, and a local neural voice model gives every teammate a natural, human-sounding voice. Hold the button and say something.</p>
+      <div class="card" id="mc"></div>`,
+      `<button class="btn" id="back">← Back</button><div class="row"><button class="btn" id="skip">Skip for now</button><button class="btn primary lg" id="next">Continue →</button></div>`);
+    const mc = micCheck(document.getElementById('mc'), { engine: settings.speech.engine, onEngine: (e) => saveSettings({ speech: { engine: e } }) });
+    onLeave(mc.destroy);
+    document.getElementById('back').onclick = () => go(2);
+    document.getElementById('skip').onclick = document.getElementById('next').onclick = () => go(4);
+    return;
+  }
+
+  if (step === 4) {
+    const [templates, status] = await Promise.all([api('/templates'), api('/providers')]);
+    const conn = connected(status);
+    if (!conn.length) return go(2);
+    const st = { template: 'product', name: '', cwd: '', roles: [] };
+    const assign = (tpl) => templates[tpl].roles.map((r, i) => {
+      const prov = r.prefer.find((p) => status[p]?.signedIn) || conn[0].id;
+      const { prefer, ...rest } = r;
+      return { ...rest, provider: prov, id: Math.random().toString(36).slice(2, 10), color: r.color || COLORS[i % COLORS.length] };
+    });
+    st.roles = assign(st.template);
+
+    const paint = () => {
+      $app.innerHTML = shell(`
+        <h2>Set up your first team</h2>
+        <p class="lead">A project is a folder your agents work in, plus the people on the call. You can change everything later.</p>
+        <div class="fields two">
+          <label class="field">Project name<input type="text" id="pname" placeholder="e.g. Website relaunch" value="${esc(st.name)}" /></label>
+          <label class="field">Folder <span class="hint">Where agents read and write files</span>
+            <div class="row nowrap"><input type="text" id="pcwd" placeholder="~/projects/website" value="${esc(st.cwd)}" /></div>
+            <span class="small" id="cwd-msg"></span></label>
+        </div>
+        <h3 class="sub">Who's on the team?</h3>
+        <div class="tpl-grid">${Object.entries(templates).map(([k, t]) => `
+          <button class="tpl ${k === st.template ? 'on' : ''}" data-tpl="${k}"><b>${esc(t.label)}</b><span>${esc(t.blurb)}</span></button>`).join('')}</div>
+        <div class="team-preview">${st.roles.map((r, i) => `
+          <div class="tp-row">
+            <span class="av" style="background:${r.color}">${initial(r.name)}</span>
+            <div class="grow"><b>${esc(r.name)}</b><div class="small muted">${esc(r.title)} · ${esc(PERMS[r.permission].label.toLowerCase())}</div></div>
+            <select data-i="${i}" class="sel-sm">${conn.map((p) => `<option value="${p.id}" ${p.id === r.provider ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>
+          </div>`).join('')}</div>`,
+        `<button class="btn" id="back">← Back</button><button class="btn primary lg" id="create">Create team →</button>`);
+      const $ = (id) => document.getElementById(id);
+      $('pname').oninput = (e) => (st.name = e.target.value);
+      $('pcwd').oninput = (e) => { st.cwd = e.target.value; $('cwd-msg').textContent = ''; };
+      $('pcwd').onblur = checkDir;
+      $app.querySelectorAll('[data-tpl]').forEach((b) => (b.onclick = () => { st.template = b.dataset.tpl; st.roles = assign(st.template); paint(); }));
+      $app.querySelectorAll('select[data-i]').forEach((s) => (s.onchange = () => (st.roles[s.dataset.i].provider = s.value)));
+      $('back').onclick = () => go(3);
+      $('create').onclick = create;
+    };
+    async function checkDir() {
+      if (!st.cwd.trim()) return true;
+      const r = await api('/fs/check', { method: 'POST', body: { dir: st.cwd } });
+      const msg = document.getElementById('cwd-msg');
+      if (r.ok) { msg.innerHTML = '<span style="color:var(--ok)">✓ Folder found</span>'; return r.path; }
+      msg.innerHTML = `<span style="color:var(--warn)">That folder doesn't exist yet. It will be created.</span>`;
+      return null;
+    }
+    async function create() {
+      if (!st.name.trim()) return toast('Give the project a name');
+      let dir = st.cwd.trim() || `~/huddle-projects/${st.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+      const r = await api('/fs/check', { method: 'POST', body: { dir, create: true } });
+      const p = await api('/projects', { method: 'POST', body: { name: st.name.trim(), cwd: r.path, roles: st.roles } });
+      await saveSettings({ onboarded: true });
+      location.hash = `#/p/${p.id}/lobby`;
+    }
+    paint();
+  }
+}
+
+// ======================= home =======================
 async function viewHome() {
-  const projects = await api('/projects');
+  const [projects, status] = await Promise.all([api('/projects'), api('/providers')]);
+  const conn = connected(status);
   $app.innerHTML = `
   <div class="page">
     <section class="hero">
-      <h1>Your AI team,<br/><em>on one call.</em></h1>
-      <p>Give each agent a role, bring your own Claude Code, Codex, Gemini or local model, and talk to them like a meeting. Only the one you address answers.</p>
+      <h1>Good to see you, ${esc(settings.hostName || 'there')}.</h1>
+      <p>Pick a team and jump on a call, or start something new.</p>
+      <div class="row center">${Object.values(status).map((p) => `<a href="#/connections" class="chip ${p.signedIn ? 'ok' : ''}">${providerMark(p, 18)} ${esc(p.label)} ${p.signedIn ? '✓' : '·'}</a>`).join('')}</div>
     </section>
-    <div class="section-title"><h2>Projects</h2></div>
+    <div class="section-title"><h2>Your teams</h2><button class="btn primary" id="new">+ New team</button></div>
     <div class="grid">
       ${projects.map((p) => `
-        <a class="card project-card" href="#/p/${p.id}">
-          <div class="row spread"><h3>${esc(p.name)}</h3><span class="pill">${p.roles.length} agents</span></div>
-          <div class="avatars">${p.roles.map((r) => `<span class="av" style="background:${r.color}" title="${esc(r.name)}">${initial(r.name)}</span>`).join('')}</div>
-          <div class="small muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.cwd)}</div>
-        </a>`).join('')}
-      <form class="card stack" id="new">
-        <h3>New project</h3>
-        <label class="field">Name<input type="text" name="name" placeholder="e.g. Launch site redesign" required /></label>
-        <label class="field">Working folder <span class="hint">Agents read and edit files here.</span><input type="text" name="cwd" placeholder="/Users/you/code/my-app" /></label>
-        <label class="field">Start with
-          <select name="template"><option value="team">Strategist, Researcher, Developer, Intern</option><option value="blank">No roles</option></select>
-        </label>
-        <button class="btn primary">Create project</button>
-      </form>
+        <div class="card project-card">
+          <a href="#/p/${p.id}" class="stretch"><div class="row spread"><h3>${esc(p.name)}</h3><span class="pill">${p.roles.length} agent${p.roles.length === 1 ? '' : 's'}</span></div></a>
+          <div class="avatars">${p.roles.map((r) => `<span class="av" style="background:${r.color}" title="${esc(r.name)} · ${esc(status[r.provider]?.label || r.provider)}">${initial(r.name)}</span>`).join('')}</div>
+          <div class="small muted ellipsis">${esc(p.cwd)}</div>
+          <div class="row"><a class="btn primary sm" href="#/p/${p.id}/lobby">Join call</a><a class="btn sm" href="#/p/${p.id}">Edit team</a></div>
+        </div>`).join('') || '<p class="muted">No teams yet.</p>'}
     </div>
   </div>`;
-  document.getElementById('new').onsubmit = async (e) => {
-    e.preventDefault();
-    const f = Object.fromEntries(new FormData(e.target));
-    const p = await api('/projects', { method: 'POST', body: { ...f, cwd: f.cwd || undefined } });
+  document.getElementById('new').onclick = async () => {
+    if (!conn.length) { toast('Connect Claude or ChatGPT first'); location.hash = '#/connections'; return; }
+    const name = prompt('Team name');
+    if (!name) return;
+    const r = await api('/fs/check', { method: 'POST', body: { dir: `~/huddle-projects/${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`, create: true } });
+    const p = await api('/projects', { method: 'POST', body: { name, cwd: r.path, roles: [] } });
     location.hash = `#/p/${p.id}`;
   };
 }
 
-// ---------------- connections ----------------
+// ======================= connections =======================
 async function viewConnections() {
-  $app.innerHTML = `<div class="page"><p class="muted">Checking what's installed…</p></div>`;
-  const prov = await loadProviders(true);
   $app.innerHTML = `
-  <div class="page">
-    <div class="section-title"><div><h2>Connections</h2><p class="muted" style="margin:6px 0 0">Huddle never asks for an API key. Each agent runs through a tool you've already signed in to on this computer, so it uses your own plan.</p></div>
-      <button class="btn" id="refresh">Check again</button></div>
-    <div class="grid">
-      ${Object.values(prov).map((p) => `
-        <div class="card provider-card">
-          <div class="row spread"><h3>${esc(p.label)} <span class="muted small">· ${esc(p.vendor)}</span></h3>
-            <span class="pill ${p.available ? 'ok' : 'no'}"><span class="dot"></span>${p.available ? 'Connected' : 'Not found'}</span></div>
-          ${p.available && p.id === 'ollama' ? `<p class="small muted">Models: ${esc(p.models.join(', ') || 'none pulled yet')}</p>` : ''}
-          ${p.available && p.path ? `<p class="small muted"><code>${esc(p.path)}</code></p>` : ''}
-          <ol>${p.connect.map((s) => `<li>${esc(s).replace(/`([^`]+)`/g, '<code>$1</code>')}</li>`).join('')}</ol>
-        </div>`).join('')}
-    </div>
-    <div class="section-title"><h2>Voice</h2></div>
-    <div class="card small">
-      Voice uses your browser's built-in speech: free and with no key. Recognition needs <b>Chrome or Edge</b>; Safari and Firefox can still use chat and hear replies.
-      Each agent gets its own voice from those installed on your system (pick one per role in the project setup).
-    </div>
+  <div class="page narrow">
+    <h2>Connections</h2>
+    <p class="lead">Each agent runs on an AI account you already have. Huddle uses the official tools on this computer (Claude Code, Codex, Gemini CLI, Ollama), so your plan pays and no API key is stored here.</p>
+    <div class="stack" id="cards"></div>
   </div>`;
-  document.getElementById('refresh').onclick = () => render();
+  const cards = connectCards(document.getElementById('cards'));
+  onLeave(cards.destroy);
 }
 
-// ---------------- project setup ----------------
+// ======================= settings =======================
+async function viewSettings() {
+  $app.innerHTML = `
+  <div class="page narrow">
+    <h2>Settings</h2>
+    <div class="card stack" style="margin-top:20px">
+      <label class="field">Your name<input type="text" id="name" value="${esc(settings.hostName)}" /></label>
+      <label class="field">Agent voices
+        <select id="voicestyle"><option value="natural" ${settings.speech.voices !== 'system' ? 'selected' : ''}>Natural: human-sounding, runs locally (Kokoro)</option><option value="system" ${settings.speech.voices === 'system' ? 'selected' : ''}>System voices: instant, more robotic</option></select></label>
+      <label class="field">Speech recognition quality <span class="hint">For Local Whisper</span>
+        <select id="quality"><option value="accurate" ${settings.speech.quality !== 'fast' ? 'selected' : ''}>Accurate (base, ~75 MB)</option><option value="fast" ${settings.speech.quality === 'fast' ? 'selected' : ''}>Fast (tiny, ~40 MB)</option></select></label>
+      <div class="row"><button class="btn primary" id="save">Save</button></div>
+    </div>
+    <h3 class="sub">Microphone & speech</h3>
+    <div class="card" id="mc"></div>
+    <h3 class="sub">Start over</h3>
+    <div class="card row spread"><span class="small muted">Run the welcome steps again. Your teams are kept.</span><button class="btn" id="redo">Run setup again</button></div>
+  </div>`;
+  const mc = micCheck(document.getElementById('mc'), { engine: settings.speech.engine, onEngine: (e) => saveSettings({ speech: { engine: e } }) });
+  onLeave(mc.destroy);
+  document.getElementById('save').onclick = async () => {
+    const quality = document.getElementById('quality').value;
+    await saveSettings({ hostName: document.getElementById('name').value.trim(), speech: { quality, voices: document.getElementById('voicestyle').value } });
+    api('/stt/warm', { method: 'POST', body: { quality } });
+    toast('Saved');
+  };
+  document.getElementById('redo').onclick = async () => { await saveSettings({ onboarded: false }); location.hash = '#/welcome/1'; };
+}
+
+// ======================= team setup =======================
 async function viewProject(pid) {
-  const [p, prov] = await Promise.all([api(`/projects/${pid}`), loadProviders()]);
-  const voices = await Voice.voices();
+  const [p, status, vlist, nlist] = await Promise.all([api(`/projects/${pid}`), api('/providers'), voices(), naturalVoices()]);
   const draft = structuredClone(p);
+  const tests = {};
+  let dirty = false;
 
   const roleCard = (r, i) => {
-    const pv = prov[r.provider];
-    const models = pv?.models?.length ? pv.models : ['default'];
+    const prov = status[r.provider];
+    const models = prov?.models?.length ? prov.models : [{ id: 'default', label: 'Default' }];
+    const hasModel = models.some((m) => m.id === (r.model || 'default'));
+    const t = tests[r.id];
     return `
     <div class="card role-card" data-i="${i}">
       <div class="role-head">
-        <span class="av" style="background:${r.color}">${initial(r.name)}</span>
-        <div style="flex:1"><h3>${esc(r.name || 'New role')}</h3><div class="small muted">${esc(r.title || '')}</div></div>
-        ${draft.leadId === r.id ? '<span class="pill">Lead</span>' : `<button class="btn sm" data-act="lead">Make lead</button>`}
-        <button class="btn sm danger" data-act="del">Remove</button>
+        <span class="av lg" style="background:${r.color}">${initial(r.name)}</span>
+        <div class="grow"><h3>${esc(r.name || 'New teammate')}</h3><div class="small muted">${esc(r.title || '')}${prov ? ` · runs on ${esc(prov.label)}` : ''}</div></div>
+        ${draft.leadId === r.id ? '<span class="pill" title="Answers when you haven\'t named anyone yet">Lead</span>' : `<button class="btn sm ghost" data-act="lead">Make lead</button>`}
+        <button class="btn sm" data-act="test" ${t === 'run' ? 'disabled' : ''}>${t === 'run' ? '<span class="spin dark"></span> Testing' : 'Test'}</button>
+        <button class="btn sm ghost danger" data-act="del" title="Remove">✕</button>
       </div>
+      ${prov && !prov.signedIn ? `<div class="note small">${esc(prov.label)} isn't connected. <a href="#/connections">Connect it</a> or pick another.</div>` : ''}
+      ${t && t !== 'run' ? `<div class="test-result ${t.error ? 'bad' : ''}">${t.error ? '✕ ' + esc(t.error) : `✓ ${esc(r.name)}: “${esc(t.reply)}”`}</div>` : ''}
       <div class="fields">
-        <label class="field">Name <span class="hint">What you call them out loud</span><input type="text" data-k="name" value="${esc(r.name)}" /></label>
-        <label class="field">Job title<input type="text" data-k="title" value="${esc(r.title)}" /></label>
-        <label class="field">Runs on
-          <select data-k="provider">${Object.values(prov).map((x) => `<option value="${x.id}" ${x.id === r.provider ? 'selected' : ''}>${esc(x.label)}${x.available ? '' : ' (not connected)'}</option>`).join('')}</select>
-        </label>
+        <label class="field">Name <span class="hint">What you call them out loud</span><input type="text" data-k="name" value="${esc(r.name)}" placeholder="e.g. Intern" /></label>
+        <label class="field">Job title<input type="text" data-k="title" value="${esc(r.title)}" placeholder="e.g. Research intern" /></label>
+        <label class="field">AI account
+          <select data-k="provider">${Object.values(status).map((x) => `<option value="${x.id}" ${x.id === r.provider ? 'selected' : ''} ${x.signedIn || x.id === r.provider ? '' : 'disabled'}>${esc(x.label)} · ${esc(x.product)}${x.signedIn ? '' : ' (not connected)'}</option>`).join('')}</select></label>
         <label class="field">Model
-          <input type="text" data-k="model" list="models-${i}" value="${esc(r.model || 'default')}" />
-          <datalist id="models-${i}">${models.map((m) => `<option value="${esc(m)}"></option>`).join('')}</datalist>
-        </label>
-        <label class="field">Can do
-          <select data-k="permission">${Object.entries(PERMS).map(([k, v]) => `<option value="${k}" ${k === (r.permission || 'acceptEdits') ? 'selected' : ''}>${v}</option>`).join('')}</select>
-        </label>
+          <select data-k="model">${models.map((m) => `<option value="${esc(m.id)}" ${m.id === (r.model || 'default') ? 'selected' : ''}>${esc(m.label)}</option>`).join('')}${hasModel ? '' : `<option selected value="${esc(r.model)}">${esc(r.model)}</option>`}</select></label>
+        <label class="field">Allowed to
+          <select data-k="permission">${Object.entries(PERMS).map(([k, v]) => `<option value="${k}" ${k === (r.permission || 'acceptEdits') ? 'selected' : ''} title="${esc(v.hint)}">${v.label}</option>`).join('')}</select></label>
         <label class="field">Voice
-          <select data-k="voice"><option value="">Automatic</option>${voices.map((v) => `<option value="${esc(v.name)}" ${v.name === r.voice ? 'selected' : ''}>${esc(v.name)} · ${esc(v.lang)}</option>`).join('')}</select>
-        </label>
-        <label class="field">Nicknames <span class="hint">Comma-separated, for speech slips</span><input type="text" data-k="aliases" value="${esc((r.aliases || []).join(', '))}" placeholder="dev, coder" /></label>
-        <label class="field">Colour<input type="color" data-k="color" value="${r.color}" style="height:40px;padding:2px;border-radius:10px;border:1px solid var(--line)" /></label>
+          <div class="row nowrap"><select data-k="voice">
+            <optgroup label="Natural voices (recommended)">${nlist.map((v) => `<option value="${v.id}" ${v.id === naturalVoiceFor(nlist, r, i) ? 'selected' : ''}>${esc(v.label)} · ${v.accent} ${v.gender}</option>`).join('')}</optgroup>
+            <optgroup label="System voices (robotic)">${vlist.map((v) => `<option value="${esc(v.name)}" ${v.name === r.voice ? 'selected' : ''}>${esc(v.name)} · ${esc(v.lang)}</option>`).join('')}</optgroup>
+          </select><button class="btn sm" data-act="hear" title="Hear this voice">▶</button></div></label>
+        <label class="field">Also answers to <span class="hint">Nicknames, comma-separated</span><input type="text" data-k="aliases" value="${esc((r.aliases || []).join(', '))}" placeholder="dev, coder" /></label>
+        <label class="field">Colour<input type="color" data-k="color" value="${r.color}" class="color" /></label>
       </div>
-      <label class="field">Instructions <span class="hint">The role's system prompt. Meeting etiquette (only answer when addressed, short spoken summary) is added automatically.</span>
-        <textarea data-k="prompt">${esc(r.prompt)}</textarea></label>
+      <label class="field">Instructions <span class="hint">How this teammate should think and work. Meeting manners (answer only when called on, short spoken summary) are added for you.</span>
+        <textarea data-k="prompt" placeholder="e.g. You research competitors and summarise findings with sources.">${esc(r.prompt)}</textarea></label>
     </div>`;
   };
 
@@ -145,289 +269,115 @@ async function viewProject(pid) {
     $app.innerHTML = `
     <div class="page">
       <div class="row spread">
-        <div><a href="#/" class="small muted" style="text-decoration:none">← Projects</a><h1 style="font-size:48px;margin-top:6px">${esc(draft.name)}</h1></div>
-        <div class="row"><button class="btn" id="save">Save</button><button class="btn primary" id="join">Start meeting →</button></div>
+        <div><a href="#/" class="small muted plain">← Teams</a><h1 class="title">${esc(draft.name)}</h1></div>
+        <div class="row"><span class="small muted" id="dirty">${dirty ? 'Unsaved changes' : ''}</span><button class="btn" id="save">Save</button><button class="btn primary" id="join">Join call →</button></div>
       </div>
-      <div class="card fields" style="margin-top:28px">
-        <label class="field">Project name<input type="text" id="pname" value="${esc(draft.name)}" /></label>
-        <label class="field">Working folder<input type="text" id="pcwd" value="${esc(draft.cwd)}" /></label>
-        <label class="field">Your name <span class="hint">How agents refer to you</span><input type="text" id="phost" value="${esc(draft.hostName)}" /></label>
-        <label class="field">Hand-offs <span class="hint">Agents can pass work with "@Name:"</span>
-          <select id="phand"><option value="1" ${draft.handoffs !== false ? 'selected' : ''}>Allowed (max 3 hops)</option><option value="0" ${draft.handoffs === false ? 'selected' : ''}>Off</option></select></label>
+      <div class="card fields" style="margin-top:24px">
+        <label class="field">Team name<input type="text" id="pname" value="${esc(draft.name)}" /></label>
+        <label class="field">Folder <span class="hint">Agents work in here</span><input type="text" id="pcwd" value="${esc(draft.cwd)}" /></label>
+        <label class="field">Agents can pass work <span class="hint">With a line like "@Developer: …"</span>
+          <select id="phand"><option value="1" ${draft.handoffs !== false ? 'selected' : ''}>Yes (up to 3 hand-offs)</option><option value="0" ${draft.handoffs === false ? 'selected' : ''}>No</option></select></label>
       </div>
-      <div class="section-title"><h2>Team</h2><button class="btn" id="add">+ Add role</button></div>
-      <div class="stack" id="roles">${draft.roles.map(roleCard).join('') || '<p class="muted">No roles yet.</p>'}</div>
-      <div class="row" style="margin-top:28px;justify-content:flex-end"><button class="btn danger" id="delete">Delete project</button></div>
+      <div class="section-title"><h2>Teammates</h2><button class="btn" id="add">+ Add teammate</button></div>
+      <div class="stack" id="roles">${draft.roles.map(roleCard).join('') || '<div class="card muted">No teammates yet. Add one to get started.</div>'}</div>
+      <div class="row" style="margin-top:28px;justify-content:flex-end"><button class="btn ghost danger" id="delete">Delete team</button></div>
     </div>`;
-
-    const bindTop = (id, k, map = (v) => v) => (document.getElementById(id).oninput = (e) => (draft[k] = map(e.target.value)));
-    bindTop('pname', 'name'); bindTop('pcwd', 'cwd'); bindTop('phost', 'hostName'); bindTop('phand', 'handoffs', (v) => v === '1');
+    const $ = (id) => document.getElementById(id);
+    const touch = () => { dirty = true; $('dirty').textContent = 'Unsaved changes'; };
+    $('pname').oninput = (e) => { draft.name = e.target.value; touch(); };
+    $('pcwd').oninput = (e) => { draft.cwd = e.target.value; touch(); };
+    $('phand').onchange = (e) => { draft.handoffs = e.target.value === '1'; touch(); };
     $app.querySelectorAll('.role-card').forEach((card) => {
       const r = draft.roles[card.dataset.i];
       card.querySelectorAll('[data-k]').forEach((el) => {
         el.oninput = el.onchange = () => {
           const k = el.dataset.k;
           r[k] = k === 'aliases' ? el.value.split(',').map((s) => s.trim()).filter(Boolean) : el.value;
+          touch();
           if (k === 'provider') { r.model = 'default'; paint(); }
           if (k === 'color') card.querySelector('.av').style.background = el.value;
+          if (k === 'name') card.querySelector('h3').textContent = el.value || 'New teammate';
         };
       });
-      card.querySelector('[data-act=del]').onclick = () => { draft.roles.splice(card.dataset.i, 1); paint(); };
+      card.querySelector('[data-act=del]').onclick = () => { if (confirm(`Remove ${r.name || 'this teammate'}?`)) { draft.roles.splice(card.dataset.i, 1); touch(); paint(); } };
       const lead = card.querySelector('[data-act=lead]');
-      if (lead) lead.onclick = () => { draft.leadId = r.id; paint(); };
+      if (lead) lead.onclick = () => { draft.leadId = r.id; touch(); paint(); };
+      card.querySelector('[data-act=hear]').onclick = async (e) => {
+        const b = e.currentTarget; const v = card.querySelector('[data-k=voice]').value;
+        if (!nlist.some((x) => x.id === v)) { const u = new SpeechSynthesisUtterance(`Hi, I'm ${r.name || 'your teammate'}.`); u.voice = vlist.find((x) => x.name === v) || null; speechSynthesis.speak(u); return; }
+        b.innerHTML = '<span class="spin dark"></span>';
+        try { await previewNatural(`Hi ${settings.hostName || 'there'}, I'm ${r.name || 'your new teammate'}. Ready when you are.`, v); }
+        catch { toast('Voice model is still downloading. Try again in a moment.'); }
+        b.textContent = '▶';
+      };
+      card.querySelector('[data-act=test]').onclick = async () => {
+        tests[r.id] = 'run'; paint();
+        try { tests[r.id] = await api(`/providers/${r.provider}/test`, { method: 'POST', body: { model: r.model } }); }
+        catch (e) { tests[r.id] = { error: e.message }; }
+        paint();
+      };
     });
-    document.getElementById('add').onclick = () => {
-      draft.roles.push({ id: Math.random().toString(36).slice(2, 10), name: '', title: '', provider: 'claude', model: 'default', permission: 'plan', color: COLORS[draft.roles.length % COLORS.length], prompt: '' });
-      paint();
+    $('add').onclick = () => {
+      const prov = Object.values(status).find((x) => x.signedIn)?.id || 'claude';
+      draft.roles.push({ id: Math.random().toString(36).slice(2, 10), name: '', title: '', provider: prov, model: 'default', permission: 'plan', color: COLORS[draft.roles.length % COLORS.length], prompt: '' });
+      touch(); paint();
       $app.querySelector('.role-card:last-child [data-k=name]').focus();
     };
-    const save = async () => {
-      if (draft.roles.some((r) => !r.name.trim())) throw new Error('Every role needs a name.');
-      Object.assign(draft, await api(`/projects/${pid}`, { method: 'PUT', body: draft }));
-    };
-    document.getElementById('save').onclick = () => save().then(() => toast('Saved'), (e) => toast(e.message));
-    document.getElementById('join').onclick = () => save().then(() => (location.hash = `#/p/${pid}/meet`), (e) => toast(e.message));
-    document.getElementById('delete').onclick = async () => {
-      if (!confirm(`Delete "${draft.name}" and its meeting history?`)) return;
+    $('save').onclick = () => save().then(() => toast('Saved'), (e) => toast(e.message));
+    $('join').onclick = () => save().then(() => (location.hash = `#/p/${pid}/lobby`), (e) => toast(e.message));
+    $('delete').onclick = async () => {
+      if (!confirm(`Delete "${draft.name}" and its meeting history? Files in the folder are not touched.`)) return;
       await api(`/projects/${pid}`, { method: 'DELETE' });
       location.hash = '#/';
     };
   };
+  const save = async () => {
+    if (draft.roles.some((r) => !r.name.trim())) throw new Error('Every teammate needs a name.');
+    const names = draft.roles.map((r) => r.name.trim().toLowerCase());
+    if (new Set(names).size !== names.length) throw new Error('Two teammates share a name. Give each a different one so you can call on them.');
+    Object.assign(draft, await api(`/projects/${pid}`, { method: 'PUT', body: draft }));
+    dirty = false;
+  };
   paint();
 }
 
-// ---------------- meeting ----------------
-const ICON = {
-  mic: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"/></svg>',
-  cam: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4Z"/></svg>',
-  chat: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-4 4V5a1 1 0 0 1 1-1Z"/></svg>',
-  people: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-2.7 0-8 1.3-8 4v2h10v-2c0-1 .4-1.9 1.1-2.7A12 12 0 0 0 8 13Zm8 0c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4Z"/></svg>',
-  spk: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 10v4h4l5 5V5L7 10H3Zm13.5 2A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4Z"/></svg>',
-  skip: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12Zm10-12v12h2V6h-2Z"/></svg>',
-  end: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 9c-1.6 0-3.2.25-4.7.72v3.1c0 .4-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85a1 1 0 0 1-1.41 0L.29 13.2a1 1 0 0 1 0-1.41C3.34 8.9 7.46 7 12 7s8.66 1.9 11.71 4.79a1 1 0 0 1 0 1.41l-2.38 2.37a1 1 0 0 1-1.41 0 11.3 11.3 0 0 0-2.66-1.85 1 1 0 0 1-.56-.9v-3.1A15 15 0 0 0 12 9Z"/></svg>',
-};
-
-async function viewMeeting(pid) {
-  const p = await api(`/projects/${pid}`);
-  if (!p.roles.length) { location.hash = `#/p/${pid}`; return toast('Add at least one role first.'); }
-  document.body.classList.add('in-meeting');
-  const roles = Object.fromEntries(p.roles.map((r) => [r.id, r]));
-  const st = { transcript: [], agents: {}, target: 'auto', panel: 'chat', speaking: null, queued: new Set(), cam: null, lastAddressed: null };
-  const nameOf = (id) => (id === 'you' ? p.hostName || 'You' : roles[id]?.name || id);
-  const voice = new Voice({
-    roles,
-    onSpeaking: (id) => { st.speaking = id; paintTiles(); },
-    onQueue: (ids) => { st.queued = new Set(ids); paintTiles(); },
-    onCaption: (text, final) => paintCaption(text, final),
-    onUtterance: (text) => send(text, 'voice'),
-    onState: () => paintBar(),
-    onError: (m) => toast(m, 4000),
-  });
-
+// ======================= lobby (pre-join) =======================
+async function viewLobby(pid) {
+  const [p, status] = await Promise.all([api(`/projects/${pid}`), api('/providers')]);
+  if (!p.roles.length) { toast('Add a teammate first'); location.hash = `#/p/${pid}`; return; }
+  const missing = [...new Set(p.roles.filter((r) => !status[r.provider]?.signedIn).map((r) => status[r.provider]?.label || r.provider))];
   $app.innerHTML = `
-  <div class="meet">
-    <div class="meet-top"><span><b>${esc(p.name)}</b> · <span id="clock"></span></span><span class="small" id="conn">Connecting…</span></div>
-    <div class="stage" id="stage" style="--cols:${p.roles.length + 1 <= 2 ? 2 : p.roles.length + 1 <= 4 ? 2 : 3}"></div>
-    <aside class="side" id="side">
-      <div class="side-head">
-        <div class="tabs"><button data-tab="chat" class="on">Chat</button><button data-tab="people">People</button></div>
-        <button class="btn sm" id="close-side">✕</button>
+  <div class="page lobby">
+    <div class="lobby-left">
+      <div class="preview" id="preview"><div class="face big" style="background:#5f6368">${initial(settings.hostName)}</div><video autoplay muted playsinline hidden></video>
+        <button class="cbtn" id="cam" title="Camera">📷</button></div>
+      <div class="card" id="mc"></div>
+    </div>
+    <div class="lobby-right">
+      <h2>Ready to join?</h2>
+      <p class="muted">${esc(p.name)}</p>
+      <div class="team-preview">${p.roles.map((r) => `
+        <div class="tp-row"><span class="av" style="background:${r.color}">${initial(r.name)}</span>
+          <div class="grow"><b>${esc(r.name)}</b><div class="small muted">${esc(r.title || '')}</div></div>
+          <span class="pill ${status[r.provider]?.signedIn ? 'ok' : 'no'}">${esc(status[r.provider]?.label || r.provider)}</span></div>`).join('')}</div>
+      ${missing.length ? `<div class="note small">${esc(missing.join(', '))} ${missing.length > 1 ? 'aren\'t' : 'isn\'t'} connected, so those teammates can't answer. <a href="#/connections">Connect</a></div>` : ''}
+      <div class="tips small muted">
+        <b>How to talk to them</b>
+        <ul><li>Start with a name: “<i>${esc(p.roles.at(-1).name)}, can you…</i>”</li><li>“<i>Everyone, …</i>” asks the whole team; they answer one at a time.</li>
+        <li>Hold <kbd>Space</kbd> to talk. Click a tile to talk to just that person.</li></ul>
       </div>
-      <div class="msgs" id="msgs"></div>
-      <div class="people" id="people" hidden></div>
-      <div class="compose">
-        <div class="to-row">To <select id="to"><option value="auto">Whoever I name (auto)</option><option value="all">Everyone</option>${p.roles.map((r) => `<option value="${r.id}">${esc(r.name)} only</option>`).join('')}</select></div>
-        <form id="form"><input type="text" id="input" placeholder="Message… (start with a name, e.g. “Intern, …”)" autocomplete="off" /><button class="btn primary sm">Send</button></form>
-      </div>
-    </aside>
-    <div class="caption" id="caption"></div>
-    <div class="bar">
-      <div class="left small" style="color:#aaa;min-width:180px" id="hint"></div>
-      <div class="center" id="controls"></div>
-      <div class="row"><button class="cbtn" data-c="chat" title="Chat">${ICON.chat}</button><button class="cbtn" data-c="people" title="People">${ICON.people}</button></div>
+      <div class="row"><button class="btn primary lg" id="join">Join now</button><a class="btn lg" href="#/p/${pid}">Edit team</a></div>
     </div>
   </div>`;
-  const $ = (id) => document.getElementById(id);
-  const t0 = Date.now();
-  const clock = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); $('clock').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }, 1000);
-
-  // ----- socket -----
-  let ws, closed = false;
-  const connect = () => {
-    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?project=${pid}`);
-    ws.onopen = () => ($('conn').textContent = 'Live');
-    ws.onclose = () => { $('conn').textContent = 'Reconnecting…'; if (!closed) setTimeout(connect, 1200); };
-    ws.onmessage = (ev) => {
-      const m = JSON.parse(ev.data);
-      if (m.type === 'state') { st.transcript = m.transcript; st.agents = m.agents; st.lastAddressed = m.lastAddressed; paintAll(); }
-      if (m.type === 'agent') { st.agents[m.id] = { status: m.status, activity: m.activity, queued: m.queued }; paintTiles(); paintPeople(); }
-      if (m.type === 'entry') {
-        st.transcript.push(m.entry);
-        if (m.entry.from === 'you' && m.entry.to.length === 1 && m.entry.to !== 'all') st.lastAddressed = m.entry.to[0];
-        appendMsg(m.entry);
-        if (m.entry.from === 'you') paintCaption(`${m.entry.text}`, true, m.entry.to);
-        else if (m.entry.say && !m.entry.handoff) voice.speak(m.entry.from, m.entry.say);
-        paintHint();
-      }
-    };
+  const mc = micCheck(document.getElementById('mc'), { engine: settings.speech.engine, onEngine: (e) => saveSettings({ speech: { engine: e } }) });
+  onLeave(mc.destroy);
+  let cam = null;
+  const v = document.querySelector('#preview video');
+  document.getElementById('cam').onclick = async () => {
+    if (cam) { cam.getTracks().forEach((t) => t.stop()); cam = null; v.hidden = true; localStorage.setItem('huddle.cam', '0'); return; }
+    try { cam = await navigator.mediaDevices.getUserMedia({ video: true }); v.srcObject = cam; v.hidden = false; localStorage.setItem('huddle.cam', '1'); }
+    catch { toast('Camera not available'); }
   };
-  connect();
-  const send = (text, via = 'chat') => {
-    if (!text.trim()) return;
-    if (ws.readyState !== 1) return toast('Not connected yet');
-    const to = via === 'chat' ? $('to').value : st.target;
-    ws.send(JSON.stringify({ type: 'say', text, to, via }));
-  };
-
-  // ----- tiles -----
-  const paintTiles = () => {
-    const you = `<div class="tile ${voice.listening ? 'speaking' : ''}" data-id="you">
-      ${st.cam ? '<video autoplay muted playsinline></video>' : `<div class="face" style="background:#5f6368">${initial(p.hostName)}</div>`}
-      <div class="label">${esc(p.hostName || 'You')} (you)</div></div>`;
-    const tiles = p.roles.map((r) => {
-      const a = st.agents[r.id] || {};
-      const speaking = st.speaking === r.id;
-      const working = a.status === 'working';
-      const badges = [
-        speaking ? '<span><span class="bars"><i></i><i></i><i></i></span>Speaking</span>' : '',
-        !speaking && st.queued.has(r.id) ? '<span>✋ Waiting to speak</span>' : '',
-        working ? `<span><span class="spin"></span>${a.queued ? 'Working · more queued' : 'Working'}</span>` : '',
-        a.status === 'error' ? '<span style="color:#f28b82">Error</span>' : '',
-      ].join('');
-      return `<div class="tile ${speaking ? 'speaking' : ''} ${st.target === r.id ? 'target' : ''}" data-id="${r.id}" title="Click to talk only to ${esc(r.name)}">
-        ${working && a.activity ? `<div class="activity">${esc(a.activity)}</div>` : ''}
-        <div class="badge">${badges}</div>
-        <div class="face" style="background:${r.color}">${initial(r.name)}</div>
-        <div class="label">${esc(r.name)}${r.title ? ` <span class="model">${esc(r.title)}</span>` : ''} <span class="model">· ${esc(r.provider)}${r.model && r.model !== 'default' ? ' ' + esc(r.model) : ''}</span></div>
-      </div>`;
-    });
-    const stage = $('stage');
-    const video = stage.querySelector('video');
-    stage.innerHTML = you + tiles.join('');
-    if (st.cam) { const v = stage.querySelector('video'); v.srcObject = st.cam; }
-    void video;
-    stage.querySelectorAll('.tile[data-id]').forEach((t) => {
-      if (t.dataset.id === 'you') return;
-      t.onclick = () => { st.target = st.target === t.dataset.id ? 'auto' : t.dataset.id; paintTiles(); paintHint(); };
-    });
-  };
-
-  const paintHint = () => {
-    const h = st.target !== 'auto' ? `Talking only to <b style="color:#8ab4f8">${esc(nameOf(st.target))}</b> · click the tile again to release`
-      : st.lastAddressed ? `Say a name to switch · now with <b style="color:#fff">${esc(nameOf(st.lastAddressed))}</b>`
-      : 'Start with a name: “Intern, …” or “Everyone, …”';
-    $('hint').innerHTML = h;
-  };
-
-  let capTimer;
-  const paintCaption = (text, final, to) => {
-    clearTimeout(capTimer);
-    const target = to ? (to === 'all' ? 'Everyone' : [].concat(to).map(nameOf).join(', ')) : '';
-    $('caption').innerHTML = text ? `${target ? `<span class="to">→ ${esc(target)}</span> ` : ''}${esc(text)}${final ? '' : ' …'}` : '';
-    if (final) capTimer = setTimeout(() => ($('caption').textContent = ''), 5000);
-  };
-
-  // ----- controls -----
-  const paintBar = () => {
-    const v = voice;
-    $('controls').innerHTML = `
-      ${v.supported ? `
-        <button class="cbtn ${v.listening ? 'live' : ''}" id="mic" title="${v.mode === 'ptt' ? 'Hold to talk (or hold Space)' : 'Mic on/off'}">${ICON.mic}${v.mode === 'ptt' ? '<span class="hide-sm">Hold to talk</span>' : v.listening ? '<span class="hide-sm">Listening</span>' : '<span class="hide-sm">Mic off</span>'}</button>
-        <select id="mode" class="hide-sm" title="How the mic works"><option value="ptt" ${v.mode === 'ptt' ? 'selected' : ''}>Push to talk</option><option value="open" ${v.mode === 'open' ? 'selected' : ''}>Open mic</option></select>`
-        : '<span class="small" style="color:#aaa">Voice input needs Chrome or Edge, so use chat</span>'}
-      <button class="cbtn ${st.cam ? '' : ''}" id="cam" title="Camera">${ICON.cam}</button>
-      <button class="cbtn ${v.muted ? '' : 'on'}" id="spk" title="Agents speak replies aloud">${ICON.spk}</button>
-      <button class="cbtn" id="skip" title="Skip whoever is speaking">${ICON.skip}</button>
-      <label class="cbtn hide-sm" title="With headphones on, you can interrupt agents mid-sentence"><input type="checkbox" id="hp" ${v.headphones ? 'checked' : ''}/> Headphones</label>
-      <button class="cbtn red" id="leave" title="Leave">${ICON.end}</button>`;
-    const mic = $('mic');
-    if (mic) {
-      if (v.mode === 'ptt') {
-        mic.onpointerdown = (e) => { e.preventDefault(); v.pttStart(); };
-        mic.onpointerup = mic.onpointerleave = () => v.listening && v.pttEnd();
-      } else mic.onclick = () => v.toggleOpen();
-      $('mode').onchange = (e) => v.setMode(e.target.value);
-    }
-    $('spk').onclick = () => v.setMuted(!v.muted);
-    $('skip').onclick = () => v.skip();
-    $('hp').onchange = (e) => v.setHeadphones(e.target.checked);
-    $('leave').onclick = () => (location.hash = `#/p/${pid}`);
-    $('cam').onclick = async () => {
-      if (st.cam) { st.cam.getTracks().forEach((t) => t.stop()); st.cam = null; }
-      else { try { st.cam = await navigator.mediaDevices.getUserMedia({ video: true }); } catch { toast('Camera not available'); } }
-      paintTiles();
-    };
-    paintTiles();
-  };
-
-  // ----- side panel -----
-  const fmt = (text) => esc(text).replace(/```[\w-]*\n?([\s\S]*?)```/g, '<pre>$1</pre>');
-  const msgHtml = (e) => {
-    const toTxt = e.to === 'all' ? 'Everyone' : [].concat(e.to).map(nameOf).join(', ');
-    const r = roles[e.from];
-    return `<div class="msg ${e.from === 'you' ? 'you' : ''} ${e.handoff ? 'handoff' : ''} ${e.error ? 'error' : ''}">
-      <div class="meta">${r ? `<span class="av" style="width:18px;height:18px;font-size:10px;border:0;background:${r.color}">${initial(r.name)}</span>` : ''}<b>${esc(nameOf(e.from))}</b> → ${esc(toTxt)}
-      ${e.via === 'voice' ? '· 🎙' : ''} · ${new Date(e.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-      ${r && e.say ? `<button class="btn sm" data-replay="${e.id}" style="padding:0 8px;margin-left:auto">▶</button>` : ''}</div>
-      <div class="text">${fmt(e.text)}</div></div>`;
-  };
-  const bindReplay = (root) => root.querySelectorAll('[data-replay]').forEach((b) => (b.onclick = () => {
-    const e = st.transcript.find((x) => x.id === b.dataset.replay);
-    if (e) voice.speak(e.from, e.say, true);
-  }));
-  const appendMsg = (e) => {
-    const box = $('msgs');
-    const near = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-    box.querySelector('p.muted')?.remove();
-    box.insertAdjacentHTML('beforeend', msgHtml(e));
-    bindReplay(box.lastElementChild);
-    if (near || e.from === 'you') box.scrollTop = box.scrollHeight;
-  };
-  const paintMsgs = () => {
-    const box = $('msgs');
-    box.innerHTML = st.transcript.length ? st.transcript.map(msgHtml).join('') : `<p class="muted small">Nothing yet. Try: “Researcher, what does this project do?” or “Everyone, introduce yourselves.”</p>`;
-    bindReplay(box);
-    box.scrollTop = box.scrollHeight;
-  };
-  const paintPeople = () => {
-    $('people').innerHTML = p.roles.map((r) => {
-      const a = st.agents[r.id] || {};
-      return `<div class="person"><span class="av" style="background:${r.color}">${initial(r.name)}</span>
-        <div class="grow"><div><b>${esc(r.name)}</b> <span class="muted small">${esc(r.title || '')}</span></div>
-        <div class="act">${a.status === 'working' ? esc(a.activity || 'Working…') : a.status === 'error' ? 'Error: ' + esc(a.activity) : 'Idle'} · ${esc(r.provider)} ${esc(r.model || '')}</div></div>
-        ${a.status === 'working' ? `<button class="btn sm" data-stop="${r.id}">Stop</button>` : ''}</div>`;
-    }).join('') + `<div class="row" style="padding:14px 0"><button class="btn sm danger" id="clear">Clear meeting history</button></div>`;
-    $('people').querySelectorAll('[data-stop]').forEach((b) => (b.onclick = () => ws.send(JSON.stringify({ type: 'stop', id: b.dataset.stop }))));
-    $('clear').onclick = () => confirm('Clear the transcript and start every agent fresh?') && ws.send(JSON.stringify({ type: 'clear' }));
-  };
-  const setPanel = (tab) => {
-    const side = $('side');
-    if (tab === st.panel && !side.hidden && tab !== undefined) { side.hidden = true; return; }
-    side.hidden = false;
-    st.panel = tab || st.panel;
-    side.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === st.panel));
-    $('msgs').hidden = st.panel !== 'chat';
-    $('people').hidden = st.panel !== 'people';
-    side.querySelector('.compose').hidden = st.panel !== 'chat';
-  };
-  document.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => setPanel(b.dataset.tab)));
-  document.querySelectorAll('[data-c]').forEach((b) => (b.onclick = () => setPanel(b.dataset.c)));
-  $('close-side').onclick = () => ($('side').hidden = true);
-  if (matchMedia('(max-width: 860px)').matches) $('side').hidden = true;
-  $('form').onsubmit = (e) => { e.preventDefault(); send($('input').value); $('input').value = ''; };
-
-  const paintAll = () => { paintTiles(); paintMsgs(); paintPeople(); paintHint(); };
-  paintBar(); paintHint();
-
-  // Space = push to talk (when not typing).
-  const typing = () => ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
-  const kd = (e) => { if (e.code === 'Space' && !e.repeat && !typing() && voice.mode === 'ptt') { e.preventDefault(); voice.pttStart(); } };
-  const ku = (e) => { if (e.code === 'Space' && !typing() && voice.mode === 'ptt' && voice.listening) { e.preventDefault(); voice.pttEnd(); } };
-  addEventListener('keydown', kd); addEventListener('keyup', ku);
-
-  cleanup = () => {
-    closed = true; ws?.close(); clearInterval(clock); voice.destroy();
-    st.cam?.getTracks().forEach((t) => t.stop());
-    removeEventListener('keydown', kd); removeEventListener('keyup', ku);
-  };
+  onLeave(() => cam?.getTracks().forEach((t) => t.stop()));
+  document.getElementById('join').onclick = () => (location.hash = `#/p/${pid}/meet`);
 }
