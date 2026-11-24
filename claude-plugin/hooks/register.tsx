@@ -25,6 +25,16 @@ const proposal = atom({ plugin: 'huddle', key: 'proposal' } as const, null, { sh
 const busy = atom({ plugin: 'huddle', key: 'busy' } as const, null)
 const launched = atom({ plugin: 'huddle', key: 'launched' } as const, false)
 
+// The Huddle app this plugin needs at least (team set-up, invites, the floating call).
+const MIN_VERSION = '0.2.0'
+const older = (v: string, min: string) => {
+  const a = String(v || '0').split('.').map(Number), b = min.split('.').map(Number)
+  for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) < (b[i] || 0)
+  return false
+}
+const outdated = (l: Live | null) => !!l && older(l.version, MIN_VERSION)
+const DOWNLOAD = `${SITE}/#setup`
+
 const inFolder = (cwd: string, dir: string) => !!cwd && !!dir && (cwd === dir || cwd.startsWith(dir.endsWith('/') ? dir : dir + '/'))
 const folderName = (cwd: string) => cwd.split(/[\\/]/).filter(Boolean).pop() || 'Project'
 
@@ -61,6 +71,7 @@ async function openUrl($: EngineInterface, url: string, background = false): Pro
 async function api($: EngineInterface, path: string, body?: unknown): Promise<any> {
   const r = await $.http.fetch(`${HUDDLE}${path}`, body === undefined ? undefined : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
   const data = r.text ? JSON.parse(r.text) : {}
+  if (r.status === 404 && data?.error === 'Not found') throw new Error(`Your Huddle app is too old for this. Update it from ${SITE}`)
   if (!r.ok) throw new Error(data?.error || `Huddle said ${r.status}`)
   return data
 }
@@ -146,6 +157,15 @@ async function propose($: EngineInterface, description: string) {
 
 const providerName = (p: string) => (p === 'codex' ? 'ChatGPT' : p === 'claude' ? 'Claude' : p === 'gemini' ? 'Gemini' : p)
 
+// Every button goes through this: a failure shows as a toast instead of silently doing nothing.
+function safe($: EngineInterface, work: () => Promise<unknown> | unknown) {
+  return async () => {
+    try {
+      if ((await work()) === false) $.ui.toast("Huddle: that didn't open. Is the Huddle app installed?")
+    } catch (e) { $.ui.toast(`Huddle: ${(e as Error).message || e}`) }
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await update($, cwdAtom, () => e.cwd)
@@ -218,6 +238,8 @@ export const register: Register = on => {
         <Text color="#c2643d">◐</Text>
         <Text bold>Huddle</Text>
         {!l && <Text dimColor>starting…</Text>}
+        {outdated(l) && <Text color="#b7791f">needs an update for this plugin</Text>}
+        {outdated(l) && <Button key="huddle-update" variant="primary" label="Update Huddle" onPress={safe($, () => openUrl($, DOWNLOAD))} />}
         {l && team && (
           <Text dimColor wrap="truncate-end">
             {team.live ? '● ' : ''}
@@ -225,12 +247,12 @@ export const register: Register = on => {
           </Text>
         )}
         {l && !team && <Text dimColor>no team for this folder yet</Text>}
-        {team && inv && <Button key="huddle-approve" label="Bring them in" onPress={() => api($, `/api/projects/${team.id}/invites/${inv.id}/approve`, {}).then(() => refresh($))} />}
-        {team && <Button key="huddle-join" label={team.live ? 'Join call' : 'Start call'} onPress={() => join($, team)} />}
-        {l && !team && <Button key="huddle-start" label="Start a team" onPress={() => $.ui.open({ id: PANE, title: 'Huddle' })} />}
-        {!l && <Button key="huddle-get" label="Get Huddle" onPress={() => openUrl($, SITE)} />}
-        <Button key="huddle-panel" label="Panel" onPress={() => $.ui.open({ id: PANE, title: 'Huddle' })} />
-        <Button key="huddle-hide" label="Hide" onPress={() => update($, isHidden, () => true)} />
+        {team && inv && <Button key="huddle-approve" label="Bring them in" onPress={safe($, () => api($, `/api/projects/${team.id}/invites/${inv.id}/approve`, {}).then(() => refresh($)))} />}
+        {team && <Button key="huddle-join" label={team.live ? 'Join call' : 'Start call'} onPress={safe($, () => join($, team))} />}
+        {l && !team && <Button key="huddle-start" label="Start a team" onPress={safe($, () => $.ui.open({ id: PANE, title: 'Huddle' }))} />}
+        {!l && <Button key="huddle-get" label="Get Huddle" onPress={safe($, () => openUrl($, SITE))} />}
+        <Button key="huddle-panel" label="Panel" onPress={safe($, () => $.ui.open({ id: PANE, title: 'Huddle' }))} />
+        <Button key="huddle-hide" label="Hide" onPress={safe($, () => update($, isHidden, () => true))} />
       </Box>
     )
   })
@@ -249,8 +271,21 @@ export const register: Register = on => {
           <Text>Huddle isn't running on this computer.</Text>
           <Text dimColor>Huddle puts your AI teammates on a voice call, right next to Claude Code. Install the app once; after that it starts by itself.</Text>
           <Box flexDirection="row" gap={1}>
-            <Button key="start" label="Start Huddle" onPress={() => { void update($, launched, () => false); void wake($) }} />
-            <Button key="site" label="Get Huddle" onPress={() => openUrl($, SITE)} />
+            <Button key="start" label="Start Huddle" onPress={safe($, () => { void update($, launched, () => false); void wake($) })} />
+            <Button key="site" label="Get Huddle" onPress={safe($, () => openUrl($, SITE))} />
+          </Box>
+        </Box>
+      )
+    }
+
+    if (outdated(l)) {
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Text bold>Huddle needs an update</Text>
+          <Text dimColor>You're running Huddle {l.version}. This plugin needs {MIN_VERSION} or newer for starting teams, invites and the floating call. Quit Huddle from the ◐ menu-bar icon (or the Dock), install the new version, and it starts by itself next time.</Text>
+          <Box flexDirection="row" gap={1}>
+            <Button key="update" variant="primary" label="Download the update" onPress={safe($, () => openUrl($, DOWNLOAD))} />
+            <Button key="recheck" label="Check again" onPress={safe($, () => refresh($))} />
           </Box>
         </Box>
       )
@@ -275,8 +310,8 @@ export const register: Register = on => {
               ))}
             </Box>
             <Box flexDirection="row" gap={1}>
-              <Button key="accept" label="Start with this team" onPress={() => createTeam($, { mode: 'assembled', roles: pr.raw })} />
-              <Button key="again" label="Describe again" onPress={() => update($, proposal, () => null)} />
+              <Button key="accept" label="Start with this team" onPress={safe($, () => createTeam($, { mode: 'assembled', roles: pr.raw }))} />
+              <Button key="again" label="Describe again" onPress={safe($, () => update($, proposal, () => null))} />
             </Box>
           </Box>
         )
@@ -295,14 +330,14 @@ export const register: Register = on => {
           />
           <Text dimColor>Huddle invites only the people that work needs, each with matching Claude skills.</Text>
           <Box flexDirection="row" gap={1} flexWrap="wrap">
-            <Button key="allrounder" label="Just an all-rounder" onPress={() => createTeam($, { mode: 'allrounder' })} />
-            <Button key="custom" label="Build it myself" onPress={() => openUrl($, 'huddle://new')} />
+            <Button key="allrounder" label="Just an all-rounder" onPress={safe($, () => createTeam($, { mode: 'allrounder' }))} />
+            <Button key="custom" label="Build it myself" onPress={safe($, () => openUrl($, 'huddle://new'))} />
           </Box>
           {l.teams.length > 0 && (
             <Box flexDirection="column">
               <Text dimColor>Or use a team from another folder</Text>
               <Box flexDirection="row" gap={1} flexWrap="wrap">
-                {l.teams.slice(0, 4).map(t => <Button key={`team-${t.id}`} label={t.name} onPress={() => update($, selected, () => t.id)} />)}
+                {l.teams.slice(0, 4).map(t => <Button key={`team-${t.id}`} label={t.name} onPress={safe($, () => update($, selected, () => t.id))} />)}
               </Box>
             </Box>
           )}
@@ -323,8 +358,8 @@ export const register: Register = on => {
           <Box flexDirection="column">
             <Text wrap="wrap">✋ <Text bold>{inv.from}</Text> wants to bring in a <Text bold>{inv.job}</Text>{inv.reason ? <Text dimColor>: {inv.reason}</Text> : null}</Text>
             <Box flexDirection="row" gap={1}>
-              <Button key={`yes-${inv.id}`} label="Bring them in" onPress={() => api($, `/api/projects/${team.id}/invites/${inv.id}/approve`, {}).then(() => refresh($))} />
-              <Button key={`no-${inv.id}`} label="Not now" onPress={() => api($, `/api/projects/${team.id}/invites/${inv.id}/decline`, {}).then(() => refresh($))} />
+              <Button key={`yes-${inv.id}`} label="Bring them in" onPress={safe($, () => api($, `/api/projects/${team.id}/invites/${inv.id}/approve`, {}).then(() => refresh($)))} />
+              <Button key={`no-${inv.id}`} label="Not now" onPress={safe($, () => api($, `/api/projects/${team.id}/invites/${inv.id}/decline`, {}).then(() => refresh($)))} />
             </Box>
           </Box>
         ))}
@@ -365,8 +400,8 @@ export const register: Register = on => {
           }}
         />
         <Box flexDirection="row" gap={1} flexWrap="wrap">
-          <Button key="join" label={team.live ? 'Join call' : 'Start call'} onPress={() => join($, team)} />
-          <Button key="refresh" label="Refresh" onPress={() => refresh($)} />
+          <Button key="join" label={team.live ? 'Join call' : 'Start call'} onPress={safe($, () => join($, team))} />
+          <Button key="refresh" label="Refresh" onPress={safe($, () => refresh($))} />
         </Box>
       </Box>
     )
