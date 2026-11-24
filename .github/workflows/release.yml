@@ -1,0 +1,74 @@
+name: Build and release desktop apps
+
+# Push a tag like v0.1.0 to build Huddle for Mac (Apple Silicon + Intel) and
+# Windows and publish them as a GitHub release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest       # Apple Silicon
+            target: --mac --arm64
+          - os: macos-15-intel     # Intel Macs
+            target: --mac --x64
+          - os: windows-latest
+            target: --win --x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build
+        run: npx electron-builder ${{ matrix.target }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: huddle-${{ matrix.os }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          body: |
+            ## Download
+
+            | Computer | File |
+            |---|---|
+            | Mac with Apple Silicon (M1–M4) | `Huddle-mac-arm64.dmg` |
+            | Intel Mac | `Huddle-mac-x64.dmg` |
+            | Windows 10/11 | `Huddle-win-x64.exe` |
+
+            **First open on a Mac:** the app isn't notarized by Apple yet, so macOS warns about it. Right-click Huddle in Applications → **Open** → **Open**. If macOS says it's damaged, run `xattr -dr com.apple.quarantine /Applications/Huddle.app` in Terminal.
+
+            **On Windows:** SmartScreen may say it protected your PC. Click **More info** → **Run anyway**.
+
+            You also need Claude Code (signed in with Claude Pro/Max) or Codex (signed in with ChatGPT). Huddle's Connect step helps with both.
+
+            **Huddle in Claude Code:** in Huddle, open Connections → **Add to Claude Code**, or run:
+            `claude plugin marketplace add shivambisen/huddle && claude plugin install huddle@huddle`

@@ -1,16 +1,123 @@
 {
   "name": "huddle",
+  "productName": "Huddle",
   "version": "0.1.0",
   "description": "A Meet-style voice room where your own AI agents (Claude Code, Codex, Gemini CLI, Ollama) are the teammates.",
+  "author": "Huddle",
+  "license": "MIT",
+  "homepage": "https://huddle-seven-kappa.vercel.app",
+  "repository": "github:shivambisen/huddle",
   "type": "module",
-  "main": "server.js",
+  "main": "electron/main.mjs",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "app": "electron .",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
     "kokoro-js": "^1.2.1",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^45.5.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "app.huddle.desktop",
+    "productName": "Huddle",
+    "artifactName": "Huddle-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "npmRebuild": false,
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/**",
+      "node_modules/sharp/**",
+      "node_modules/@img/**"
+    ],
+    "protocols": [
+      {
+        "name": "Huddle",
+        "schemes": [
+          "huddle"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": "-",
+      "hardenedRuntime": false,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Huddle listens so you can talk to your AI teammates.",
+        "NSCameraUsageDescription": "Huddle can show your camera on your own tile during calls."
+      },
+      "files": [
+        "server.js",
+        "package.json",
+        "lib/**",
+        "public/**",
+        "electron/**",
+        "!data{,/**}",
+        "!dist{,/**}",
+        "!site{,/**}",
+        "!build{,/**}",
+        "!claude-plugin{,/**}",
+        "!**/*.command",
+        "!**/.env*",
+        "!**/.vercel{,/**}",
+        "!**/*.md",
+        "!node_modules/onnxruntime-node/bin/napi-v*/win32{,/**}",
+        "!node_modules/onnxruntime-node/bin/napi-v*/linux{,/**}"
+      ]
+    },
+    "dmg": {
+      "title": "Huddle ${version}"
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "files": [
+        "server.js",
+        "package.json",
+        "lib/**",
+        "public/**",
+        "electron/**",
+        "!data{,/**}",
+        "!dist{,/**}",
+        "!site{,/**}",
+        "!build{,/**}",
+        "!claude-plugin{,/**}",
+        "!**/*.command",
+        "!**/.env*",
+        "!**/.vercel{,/**}",
+        "!**/*.md",
+        "!node_modules/onnxruntime-node/bin/napi-v*/darwin{,/**}",
+        "!node_modules/onnxruntime-node/bin/napi-v*/linux{,/**}"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Huddle"
+    },
+    "publish": null
   }
 }

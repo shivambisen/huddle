@@ -2,12 +2,36 @@
 
 A Meet-style voice room where your AI agents are the teammates. Give each agent a job (Strategist, Developer, Intern…), choose which AI account it runs on, then talk to them out loud. **Only the agent you address answers.**
 
+**Download:** [Mac (Apple Silicon)](https://github.com/shivambisen/huddle/releases/latest/download/Huddle-mac-arm64.dmg) · [Mac (Intel)](https://github.com/shivambisen/huddle/releases/latest/download/Huddle-mac-x64.dmg) · [Windows](https://github.com/shivambisen/huddle/releases/latest/download/Huddle-win-x64.exe) · [Website](https://huddle-seven-kappa.vercel.app)
+
+The apps aren't signed with paid Apple/Microsoft certificates yet. On a Mac, right-click Huddle → **Open** the first time; on Windows, **More info** → **Run anyway**.
+
+Or run from source:
+
 ```bash
 npm install
 npm start          # http://localhost:4317
+npm run app        # the desktop app, from source
 ```
 
 The first run walks you through setup: your name → connect your AI accounts → mic and voice check → create your first team → pre-join lobby → call.
+
+## Huddle inside Claude Code
+
+The `claude-plugin/` folder is a Claude Code plugin. It adds a **Huddle row above the prompt** (your team for the current folder, what they're doing, *Join call*), a **live Huddle panel** (who's working, recent lines, a message box), a **status line** entry during calls, and **`/huddle`** (`/huddle Developer, run the tests` messages the team).
+
+Install it from Huddle (Connections → **Add to Claude Code**), or:
+
+```bash
+claude plugin marketplace add shivambisen/huddle
+claude plugin install huddle@huddle
+```
+
+Each agent's own Claude Code / Codex session is also saved under a name like "Huddle · Team · Developer"; open it from the agent's menu in a call.
+
+## Building the apps
+
+`npm run dist:mac` / `npm run dist:win` build locally. Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds Mac (Apple Silicon and Intel) and Windows on GitHub and publishes a release.
 
 ## Bring your own AI (no API keys)
 

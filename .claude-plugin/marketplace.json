@@ -1,0 +1,12 @@
+{
+  "name": "huddle",
+  "owner": { "name": "Huddle" },
+  "description": "Huddle for Claude Code: see your AI team's call, join it, and message the team from your session.",
+  "plugins": [
+    {
+      "name": "huddle",
+      "source": "./claude-plugin",
+      "description": "A Huddle row above the prompt, a live Huddle panel, a status line entry and /huddle."
+    }
+  ]
+}

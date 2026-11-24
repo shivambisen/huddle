@@ -1,0 +1,10 @@
+{
+  "name": "huddle",
+  "version": "0.1.0",
+  "description": "A Huddle button in Claude Code: see your AI team's call, join it, and message the team without leaving your session.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Huddle"
+  },
+  "homepage": "https://huddle-seven-kappa.vercel.app"
+}

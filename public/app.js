@@ -1,4 +1,4 @@
-import { api, esc, toast, initial, COLORS, PERMS, connectCards, micCheck, providerMark } from './lib.js';
+import { api, esc, toast, initial, COLORS, PERMS, connectCards, micCheck, providerMark, claudeCodeCard } from './lib.js';
 import { voices, naturalVoices, naturalVoiceFor, previewNatural } from './voice.js';
 import { viewMeeting } from './meeting.js';
 
@@ -61,7 +61,8 @@ async function viewWelcome(step) {
       go(2);
     };
     document.getElementById('next').onclick = next;
-    document.getElementById('name').onkeydown = (e) => e.key === 'Enter' && next();
+    // Returning false from an on* handler cancels the key, so never return the comparison.
+    document.getElementById('name').onkeydown = (e) => { if (e.key === 'Enter') next(); };
     return;
   }
 
@@ -193,7 +194,10 @@ async function viewConnections() {
     <h2>Connections</h2>
     <p class="lead">Each agent runs on an AI account you already have. Huddle uses the official tools on this computer (Claude Code, Codex, Gemini CLI, Ollama), so your plan pays and no API key is stored here.</p>
     <div class="stack" id="cards"></div>
+    <h3 class="sub">Use Huddle from Claude Code</h3>
+    <div id="cc"></div>
   </div>`;
+  claudeCodeCard(document.getElementById('cc'));
   const cards = connectCards(document.getElementById('cards'));
   onLeave(cards.destroy);
 }

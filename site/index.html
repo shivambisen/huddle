@@ -98,6 +98,8 @@
     pre { margin: 12px 0 0; background: #1c1c1e; color: #f3f1ec; border-radius: 12px; padding: 14px 16px; overflow-x: auto; font: 13.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
     pre .c { color: #8b8a86; }
     code { background: var(--soft); border-radius: 6px; padding: 1px 6px; font-size: 14px; }
+    .dl { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .steps details { margin: 0; }
     .split { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
 
     details { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px 22px; margin-bottom: 10px; }
@@ -134,7 +136,7 @@
         <a href="#how">How it works</a>
         <a href="#features">Features</a>
         <a href="#faq">FAQ</a>
-        <a class="btn dark sm" href="#setup">Get Huddle</a>
+        <a class="btn dark sm" href="#setup">Download</a>
       </div>
     </div>
   </nav>
@@ -143,7 +145,7 @@
     <h1>Your AI team,<br /><em>on one call.</em></h1>
     <p class="lead">Huddle is a Google Meet-style room where your AI agents are the teammates. Give each one a job, talk out loud, and only the one you call on answers.</p>
     <div class="cta">
-      <a class="btn dark" href="#setup">Set up on your Mac</a>
+      <a class="btn dark" href="#setup">Download Huddle</a>
       <a class="btn" href="http://localhost:4317" id="open-local">Open Huddle ↗</a>
     </div>
     <div class="works">
@@ -201,18 +203,24 @@
     <div class="split">
       <div class="section-head reveal">
         <div class="eyebrow">Setup</div>
-        <h2>Five minutes on your Mac.</h2>
-        <p>You need Node 20 or newer and at least one AI account: Claude (Pro or Max) through Claude Code, or ChatGPT through Codex. Huddle walks you through connecting them the first time it opens.</p>
+        <h2>Five minutes to your first call.</h2>
+        <p>Huddle runs on Mac and Windows. You need at least one AI account: Claude (Pro or Max) through Claude Code, or ChatGPT through Codex. Huddle walks you through connecting them the first time it opens.</p>
         <p style="margin-top:18px"><a class="btn" href="http://localhost:4317">Already running? Open Huddle ↗</a></p>
       </div>
       <div class="steps">
-        <div class="step reveal"><div><h3>Get the code</h3><pre><span class="c"># private repo: ask the owner for access</span>
-git clone https://github.com/shivambisen/huddle
-cd huddle && npm install</pre></div></div>
-        <div class="step reveal"><div><h3>Sign in to an AI account</h3><pre>claude auth login      <span class="c"># Claude</span>
-codex login            <span class="c"># ChatGPT</span></pre><p class="muted" style="margin-top:10px;font-size:14px">Or skip this: Huddle's Connect step installs and signs in for you.</p></div></div>
-        <div class="step reveal"><div><h3>Start Huddle and join the call</h3><pre>npm start
-<span class="c"># open http://localhost:4317</span></pre></div></div>
+        <div class="step reveal"><div><h3>Download and install</h3>
+          <div class="dl">
+            <a class="btn dark" href="https://github.com/shivambisen/huddle/releases/latest/download/Huddle-mac-arm64.dmg">Mac · Apple Silicon</a>
+            <a class="btn" href="https://github.com/shivambisen/huddle/releases/latest/download/Huddle-mac-x64.dmg">Mac · Intel</a>
+            <a class="btn" href="https://github.com/shivambisen/huddle/releases/latest/download/Huddle-win-x64.exe">Windows</a>
+          </div>
+          <p class="muted" style="margin-top:10px;font-size:14px">First open on a Mac: right-click Huddle → <b>Open</b>, since it isn't notarized yet. On Windows, if SmartScreen appears: <b>More info</b> → <b>Run anyway</b>.</p></div></div>
+        <div class="step reveal"><div><h3>Connect your AI</h3><p class="muted" style="font-size:15px">Huddle finds Claude Code and Codex on your computer and signs you in with your own Claude or ChatGPT account. No API keys.</p></div></div>
+        <div class="step reveal"><div><h3>Add Huddle to Claude Code <span class="muted" style="font-weight:400">(optional)</span></h3><p class="muted" style="font-size:15px">In Huddle, open Connections → <b>Add to Claude Code</b>. You get a Huddle row above the prompt, a live panel and <code>/huddle</code>. Or from a terminal:</p><pre>claude plugin marketplace add shivambisen/huddle
+claude plugin install huddle@huddle</pre></div></div>
+        <details class="reveal"><summary>Run from source instead</summary><pre>git clone https://github.com/shivambisen/huddle
+cd huddle && npm install && npm start
+<span class="c"># open http://localhost:4317</span></pre></details>
       </div>
     </div>
   </section>
@@ -222,7 +230,7 @@ codex login            <span class="c"># ChatGPT</span></pre><p class="muted" st
     <div class="reveal">
       <details><summary>Why does Huddle run on my computer instead of in the cloud?</summary><p>Your agents work in your project folders and use the Claude or ChatGPT login on your Mac. A website can't do that safely, so the app runs locally and this site just explains how to get it.</p></details>
       <details><summary>Does it cost anything?</summary><p>Huddle itself is free. Agents use the plan you already pay for (Claude Pro/Max, ChatGPT Plus/Pro), and voices and speech recognition run locally at no cost.</p></details>
-      <details><summary>Which browser should I use?</summary><p>Chrome, Edge or Brave work best, including pop-out. Safari works for calls and voice; pop-out needs a Chromium browser.</p></details>
+      <details><summary>App or browser?</summary><p>Either. The Mac and Windows apps include everything. If you run from source, use Chrome, Edge or Brave; Safari works for calls and voice, but pop-out needs a Chromium browser.</p></details>
       <details><summary>How fast do agents respond?</summary><p>With Sonnet or Haiku at low effort, you hear the first words in about two seconds. Bigger models and higher effort think longer before they speak.</p></details>
       <details><summary>Can agents change my files?</summary><p>Only if you let them. Each teammate is read-only, can edit files, or has full autonomy, and only inside the team's folder.</p></details>
     </div>
@@ -231,7 +239,7 @@ codex login            <span class="c"># ChatGPT</span></pre><p class="muted" st
   <div class="final wrap reveal">
     <h2>Call your team.</h2>
     <p>Set it up once, then talk to your agents like colleagues.</p>
-    <div class="cta"><a class="btn dark" href="#setup">Set up on your Mac</a></div>
+    <div class="cta"><a class="btn dark" href="#setup">Download Huddle</a></div>
   </div>
 
   <footer><div class="wrap"><span>Huddle</span><span>Runs on your Mac with your own AI accounts.</span></div></footer>

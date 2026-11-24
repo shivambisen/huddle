@@ -4,3 +4,5 @@ data/
 .env.*
 .vercel
 *.command
+dist/
+.DS_Store

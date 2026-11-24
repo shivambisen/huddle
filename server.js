@@ -4,14 +4,15 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { allStatus, providerStatus, openLogin, install, testProvider, openSession, PROVIDERS } from './lib/providers.js';
+import { allStatus, providerStatus, openLogin, install, testProvider, openSession, claudeCodePluginStatus, installClaudeCodePlugin, PROVIDERS } from './lib/providers.js';
 import { sttStatus, warm, transcribe } from './lib/stt.js';
 import { NATURAL_VOICES, ttsStatus, warmTts, synth, sentences } from './lib/tts.js';
 import { Meeting } from './lib/meeting.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DATA = process.env.HUDDLE_DATA ? path.resolve(process.env.HUDDLE_DATA) : path.join(ROOT, 'data');
-const MODEL_DIR = path.join(ROOT, 'data'); // speech model is shared, downloaded once
+const MODEL_DIR = process.env.HUDDLE_MODELS ? path.resolve(process.env.HUDDLE_MODELS) : path.join(ROOT, 'data'); // speech models, downloaded once
+const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 const PUBLIC = path.join(ROOT, 'public');
 const PORT = Number(process.env.PORT || 4317);
 const HOST = '127.0.0.1'; // agents can touch files: never listen beyond this machine
@@ -135,6 +136,30 @@ async function apiRoute(req, res, parts) {
 
   if (a === 'templates') return send(res, 200, TEMPLATES);
 
+  if (a === 'claude-code') {
+    if (!b && M === 'GET') return send(res, 200, await claudeCodePluginStatus());
+    if (b === 'install' && M === 'POST') return send(res, 200, await installClaudeCodePlugin());
+  }
+
+  // What's happening right now, for the Huddle mod in Claude Code (and anything else local).
+  if (a === 'live' && M === 'GET') {
+    const teams = projects.map((p) => {
+      const r = meetings.get(p.id);
+      const snap = r?.meeting.snapshot();
+      const t = r ? r.meeting.transcript : readJson(`${p.id}.transcript.json`, []);
+      const nameOf = (id) => (id === 'you' ? settings.hostName || 'You' : p.roles.find((x) => x.id === id)?.name || id);
+      return {
+        id: p.id, name: p.name, cwd: p.cwd,
+        live: !!r?.sockets.size,
+        lastActivity: t.at(-1)?.ts || p.createdAt || 0,
+        joinUrl: `http://localhost:${PORT}/#/p/${p.id}/meet`,
+        agents: p.roles.map((x) => ({ id: x.id, name: x.name, title: x.title || '', provider: x.provider, model: x.model || 'default', status: snap?.agents[x.id]?.status || 'idle', activity: snap?.agents[x.id]?.activity || '' })),
+        recent: t.slice(-8).map((e) => ({ from: nameOf(e.from), to: e.to === 'all' ? 'Everyone' : [].concat(e.to).map(nameOf).join(', '), text: String(e.say || e.text).slice(0, 280), ts: e.ts })),
+      };
+    }).sort((x, y) => (y.live - x.live) || (y.lastActivity - x.lastActivity));
+    return send(res, 200, { app: 'huddle', version: VERSION, url: `http://localhost:${PORT}`, host: settings.hostName || 'You', teams });
+  }
+
   if (a === 'providers') {
     if (!b) return send(res, 200, await allStatus());
     if (!PROVIDERS[b]) return send(res, 404, { error: 'Unknown provider' });
@@ -180,6 +205,13 @@ async function apiRoute(req, res, parts) {
     if (!b && M === 'POST') { const p = newProject(await body(req)); projects.push(p); saveProjects(); return send(res, 200, p); }
     const p = projects.find((x) => x.id === b);
     if (!p) return send(res, 404, { error: 'No such project' });
+    // Talk to the team without joining the call (Claude Code's /huddle uses this).
+    if (c === 'say' && M === 'POST') {
+      const { text, to } = await body(req);
+      if (!String(text || '').trim()) return send(res, 400, { error: 'Nothing to say' });
+      room(p).meeting.say({ text: String(text).slice(0, 4000), to: to || 'auto', via: 'claude-code' }).catch(() => {});
+      return send(res, 200, { ok: true });
+    }
     if (c === 'agents' && parts[4] && parts[5] === 'open' && M === 'POST') {
       const role = p.roles.find((r) => r.id === parts[4]);
       if (!role) return send(res, 404, { error: 'No such teammate' });
@@ -273,13 +305,21 @@ wss.on('connection', (ws, req) => {
 process.on('uncaughtException', (e) => console.error('Unexpected error (Huddle keeps running):', e?.stack || e));
 process.on('unhandledRejection', (e) => console.error('Unhandled promise (Huddle keeps running):', e?.stack || e));
 
-server.on('error', (e) => {
-  if (e.code !== 'EADDRINUSE') throw e;
-  console.error(`Port ${PORT} is already in use. Huddle may already be running at http://localhost:${PORT}\nUse another port with: PORT=4318 npm start`);
-  process.exit(1);
+// Started on import. A desktop app imports this module and awaits `ready`;
+// `npm start` just runs it.
+export const PORT_IN_USE = 'EADDRINUSE';
+export const ready = new Promise((resolve, reject) => {
+  server.on('error', (e) => {
+    if (e.code !== 'EADDRINUSE') return reject(e);
+    console.error(`Port ${PORT} is already in use. Huddle may already be running at http://localhost:${PORT}\nUse another port with: PORT=4318 npm start`);
+    if (!process.env.HUDDLE_EMBEDDED) process.exit(1);
+    reject(Object.assign(new Error('Port in use'), { code: PORT_IN_USE, port: PORT }));
+  });
+  server.listen(PORT, HOST, () => {
+    console.log(`Huddle running at http://localhost:${PORT}`);
+    if (settings.onboarded && settings.speech.engine === 'whisper') warm(MODEL_DIR, settings.speech.quality).catch(() => {});
+    if (settings.onboarded && settings.speech.voices !== 'system') warmTts(MODEL_DIR).catch(() => {});
+    resolve({ port: PORT, url: `http://localhost:${PORT}` });
+  });
 });
-server.listen(PORT, HOST, () => {
-  console.log(`Huddle running at http://localhost:${PORT}`);
-  if (settings.onboarded && settings.speech.engine === 'whisper') warm(MODEL_DIR, settings.speech.quality).catch(() => {});
-  if (settings.onboarded && settings.speech.voices !== 'system') warmTts(MODEL_DIR).catch(() => {});
-});
+ready.catch(() => {});

@@ -219,3 +219,35 @@ export function micCheck(el, { engine = 'whisper', onEngine = () => {} } = {}) {
 
   return { destroy: () => { cancelAnimationFrame(meterRaf); clearTimeout(sttPoll); mic?.stop(); } };
 }
+
+// ---------- Huddle inside Claude Code ----------
+export function claudeCodeCard(el) {
+  let st = null, busy = false, err = '';
+  const paint = () => {
+    const pill = !st ? '<span class="pill"><span class="spin dark"></span> Checking</span>'
+      : st.installed ? '<span class="pill ok"><span class="dot"></span>Added</span>'
+      : !st.claude ? '<span class="pill no"><span class="dot"></span>Needs Claude Code</span>'
+      : '<span class="pill half"><span class="dot"></span>Not added</span>';
+    el.innerHTML = `
+      <div class="card connect ${st?.installed ? 'ok' : ''}">
+        <div class="row">
+          <span class="pmark" style="width:36px;height:36px;background:#141414">◐</span>
+          <div style="flex:1;min-width:0"><h3>Huddle in Claude Code</h3>
+            <div class="small muted">A Huddle row above Claude Code's prompt, a live Huddle panel and <code>/huddle</code>, so you can see and message your team from any session.</div></div>
+          ${pill}
+        </div>
+        ${err ? `<div class="test-result bad">✕ ${esc(err)}</div>` : ''}
+        ${st?.installed ? '<div class="small muted">Start a new Claude Code session to see it. Type <code>/huddle</code> to open the panel, or <code>/huddle Developer, run the tests</code> to message the team.</div>' : ''}
+        <div class="row actions">${st && !st.installed && st.claude ? `<button class="btn primary" id="cc-add" ${busy ? 'disabled' : ''}>${busy ? '<span class="spin dark"></span> Adding…' : 'Add to Claude Code'}</button>` : ''}</div>
+      </div>`;
+    const b = el.querySelector('#cc-add');
+    if (b) b.onclick = async () => {
+      busy = true; err = ''; paint();
+      try { st = await api('/claude-code/install', { method: 'POST', body: {} }); toast('Huddle added to Claude Code'); }
+      catch (e) { err = e.message; }
+      busy = false; paint();
+    };
+  };
+  paint();
+  api('/claude-code').then((x) => { st = x; paint(); }).catch((e) => { st = { claude: false, installed: false }; err = e.message; paint(); });
+}
