@@ -46,6 +46,7 @@ declare module 'claude-code' {
       busy: string | null
       launched: boolean
       missingApp: boolean
+      draft: string
     }
   }
 }

@@ -25,6 +25,7 @@ const proposal = atom({ plugin: 'huddle', key: 'proposal' } as const, null, { sh
 const busy = atom({ plugin: 'huddle', key: 'busy' } as const, null)
 const launched = atom({ plugin: 'huddle', key: 'launched' } as const, false)
 const missingApp = atom({ plugin: 'huddle', key: 'missingApp' } as const, false)
+const draft = atom({ plugin: 'huddle', key: 'draft' } as const, '')
 
 // The Huddle app this plugin needs at least (team set-up, invites, the floating call).
 const MIN_VERSION = '0.2.0'
@@ -159,6 +160,55 @@ async function propose($: EngineInterface, description: string) {
 
 const providerName = (p: string) => (p === 'codex' ? 'ChatGPT' : p === 'claude' ? 'Claude' : p === 'gemini' ? 'Gemini' : p)
 
+// ---------- drawing helpers ----------
+// The same orbs as the call screen: a glowing sphere in each AI's colours that swirls
+// faster while its teammate works. SVG on the desktop app; a coloured dot in a terminal.
+const ORB: Record<string, [string, string, string]> = {
+  claude: ['#fde8d6', '#f0a978', '#c2643d'],
+  codex: ['#e3fff4', '#49c89c', '#0b7d60'],
+  gemini: ['#f6c6dc', '#9a6fd0', '#3f5fe0'],
+  ollama: ['#f3f4f5', '#a3a9b1', '#50555c'],
+}
+function orbSource(provider: string, index: number, state: string): string {
+  const [c, b, a] = ORB[provider] ?? ORB.claude!
+  const id = `o${provider}${index}${state}`
+  const spin = state === 'working' ? 3 : 14
+  const shift = ((index * 29) % 26) - 13
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<defs><radialGradient id="g${id}" cx="34%" cy="28%" r="80%"><stop offset="0" stop-color="${c}"/><stop offset=".38" stop-color="${b}"/><stop offset=".78" stop-color="${a}"/><stop offset="1" stop-color="${a}" stop-opacity=".85"/></radialGradient>
+<filter id="b${id}"><feGaussianBlur stdDeviation="3"/></filter><clipPath id="c${id}"><circle cx="32" cy="32" r="30"/></clipPath></defs>
+<g style="filter:hue-rotate(${shift}deg)"${state === 'error' ? ' opacity=".5"' : ''}>
+<circle cx="32" cy="32" r="30" fill="url(#g${id})"/>
+<g clip-path="url(#c${id})" filter="url(#b${id})" opacity=".75"><ellipse cx="32" cy="14" rx="20" ry="7" fill="${c}"><animateTransform attributeName="transform" type="rotate" from="0 32 32" to="360 32 32" dur="${spin}s" repeatCount="indefinite"/></ellipse>
+<ellipse cx="32" cy="50" rx="16" ry="6" fill="${b}"><animateTransform attributeName="transform" type="rotate" from="180 32 32" to="540 32 32" dur="${spin * 1.3}s" repeatCount="indefinite"/></ellipse></g>
+<ellipse cx="24" cy="19" rx="11" ry="7" fill="#fff" opacity=".55" filter="url(#b${id})"/></g></svg>`
+}
+function orb($: EngineInterface, e: { surface: string | null }, provider: string, index: number, state: string, size: number) {
+  const ui = $.ui.resolve(e as any) as any
+  if (e.surface === 'desktop' || e.surface === 'mobile') return <ui.Svg source={orbSource(provider, index, state)} alt={`${providerName(provider)} teammate`} width={size} height={size} />
+  const [, , a] = ORB[provider] ?? ORB.claude!
+  return <ui.Text color={a}>{state === 'working' ? '◉' : '●'}</ui.Text>
+}
+const LOGO = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="#141414"/><path d="M16 2a14 14 0 0 1 0 28z" fill="#c2643d"/></svg>`
+function logo($: EngineInterface, e: { surface: string | null }, size = 16) {
+  const ui = $.ui.resolve(e as any) as any
+  if (e.surface === 'desktop' || e.surface === 'mobile') return <ui.Svg source={LOGO} alt="Huddle" width={size} height={size} />
+  return <ui.Text color="#c2643d">◐</ui.Text>
+}
+
+// Text sizes and weights only where the surface supports them; a terminal gets bold instead.
+function styles(e: { surface: string | null }) {
+  const rich = e.surface === 'desktop' || e.surface === 'mobile'
+  return {
+    small: {} as any,
+    head: { bold: true } as any,
+    clamp: {} as any, // the panel doesn't take maxLines
+    strong: { bold: true } as any,
+    medium: { bold: true } as any,
+    plain: { bold: false } as any,
+  }
+}
+
 // Install or update the Huddle app from Claude Code, in one click. On a Mac this runs the
 // same one-line installer as the website (a curl download isn't quarantined, so macOS
 // doesn't block the unsigned app); on Windows it installs silently for this user.
@@ -254,187 +304,248 @@ export const register: Register = on => {
     return { text: l ? 'Huddle panel opened.' : "Huddle isn't running yet. Install it from " + SITE }
   })
 
-  // The Huddle row above the prompt.
+  // The Huddle row above the prompt: logo, one line of status, one main action.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || (await read($, isHidden))) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
+    const st = styles(e)
     const l = await read($, live)
     const team = pickTeam(l, await read($, cwdAtom), await read($, selected))
     const inv = team?.invites?.[0]
+    const missing = await read($, missingApp)
+    const status = !l ? (missing ? 'not installed' : 'starting…') : outdated(l) ? 'needs an update' : team ? summary(team) : 'no team for this folder yet'
 
     return (
       <Box flexDirection="row" alignItems="center" gap={1}>
-        <Text color="#c2643d">◐</Text>
-        <Text bold>Huddle</Text>
-        {!l && <Text dimColor>{(await read($, missingApp)) ? 'not installed' : 'starting…'}</Text>}
-        {outdated(l) && <Text color="#b7791f">needs an update for this plugin</Text>}
-        {outdated(l) && <Button key="huddle-update" variant="primary" label="Update Huddle" onPress={safe($, () => installApp($))} />}
-        {l && team && (
-          <Text dimColor wrap="truncate-end">
-            {team.live ? '● ' : ''}
-            {team.name} · {summary(team)}
-          </Text>
-        )}
-        {l && !team && <Text dimColor>no team for this folder yet</Text>}
-        {team && inv && <Button key="huddle-approve" label="Bring them in" onPress={safe($, () => api($, `/api/projects/${team.id}/invites/${inv.id}/approve`, {}).then(() => refresh($)))} />}
-        {team && <Button key="huddle-join" label={team.live ? 'Join call' : 'Start call'} onPress={safe($, () => join($, team))} />}
-        {l && !team && <Button key="huddle-start" label="Start a team" onPress={safe($, () => $.ui.open({ id: PANE, title: 'Huddle' }))} />}
-        {!l && <Button key="huddle-get" variant="primary" label="Install Huddle" onPress={safe($, () => installApp($))} />}
-        <Button key="huddle-panel" label="Panel" onPress={safe($, () => $.ui.open({ id: PANE, title: 'Huddle' }))} />
-        <Button key="huddle-hide" label="Hide" onPress={safe($, () => update($, isHidden, () => true))} />
+        {logo($, e)}
+        <Text {...st.strong}>Huddle</Text>
+        {team && <Text {...st.medium}>{team.name}</Text>}
+        {team?.live && <Text color="success">● live</Text>}
+        <Text dimColor wrap="truncate-end">{status}</Text>
+        {!l && <Button key="huddle-install" variant="primary" label={missing ? 'Install Huddle' : 'Start Huddle'} onPress={safe($, () => (missing ? installApp($) : (update($, launched, () => false), wake($))))} />}
+        {outdated(l) && <Button key="huddle-update" variant="primary" label="Update" onPress={safe($, () => installApp($))} />}
+        {l && !outdated(l) && inv && team && <Button key="huddle-approve" variant="primary" label={`Bring in ${inv.job}`} onPress={safe($, () => api($, `/api/projects/${team.id}/invites/${inv.id}/approve`, {}).then(() => refresh($)))} />}
+        {l && !outdated(l) && !inv && team && <Button key="huddle-join" variant="primary" label={team.live ? 'Join call' : 'Start call'} onPress={safe($, () => join($, team))} />}
+        {l && !outdated(l) && !team && <Button key="huddle-start" variant="primary" label="Start a team" onPress={safe($, () => $.ui.open({ id: PANE, title: 'Huddle' }))} />}
+        <Button key="huddle-panel" plain label="Open panel" onPress={safe($, () => $.ui.open({ id: PANE, title: 'Huddle' }))} />
+        <Button key="huddle-hide" plain role="dismiss" label="✕" onPress={safe($, () => update($, isHidden, () => true))} />
       </Box>
     )
   })
 
   // The Huddle panel.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Input, Text } = $.ui.resolve(e)
+    const { Box, Button, Input, Progress, Text } = $.ui.resolve(e)
+    const st = styles(e)
     const l = await read($, live)
     const cwd = await read($, cwdAtom)
     const team = pickTeam(l, cwd, await read($, selected))
     const working = await read($, busy)
+    const missing = await read($, missingApp)
 
-    if (working) return <Text dimColor>{working}</Text>
+    const Section = ({ title, children }: { title: string; children?: unknown }) => (
+      <Box flexDirection="column" gap={1}>
+        <Text {...st.small} {...st.strong} dimColor>{title.toUpperCase()}</Text>
+        {children as any}
+      </Box>
+    )
+    const Card = ({ tone, children }: { tone?: string; children?: unknown }) => (
+      <Box flexDirection="column" gap={1} padding={1} borderStyle="round" borderColor={tone || 'subtle'}>
+        {children as any}
+      </Box>
+    )
+    const header = (title: string, sub?: string, chip?: unknown) => (
+      <Box flexDirection="column">
+        <Box flexDirection="row" alignItems="center" gap={1}>
+          {logo($, e, 22)}
+          <Text {...st.head} wrap="truncate-end">{title}</Text>
+          {chip as any}
+        </Box>
+        {sub ? <Text dimColor {...st.small} wrap="truncate-start">{sub}</Text> : null}
+      </Box>
+    )
+
+    if (working) {
+      return (
+        <Box flexDirection="column" gap={2}>
+          {header('Huddle')}
+          <Progress label={working} color="claude" />
+        </Box>
+      )
+    }
 
     if (!l) {
       return (
-        <Box flexDirection="column" gap={1}>
-          <Text>{(await read($, missingApp)) ? "Huddle isn't installed yet." : "Huddle isn't running on this computer."}</Text>
-          <Text dimColor>Huddle puts your AI teammates on a voice call, right next to Claude Code. Install it once; after that it starts by itself whenever you use Claude Code.</Text>
-          <Box flexDirection="row" gap={1}>
-            <Button key="install" variant="primary" label="Install Huddle" onPress={safe($, () => installApp($))} />
-            <Button key="start" label="Start Huddle" onPress={safe($, () => { void update($, launched, () => false); void wake($) })} />
-            <Button key="site" label="About Huddle" onPress={safe($, () => openUrl($, SITE))} />
-          </Box>
+        <Box flexDirection="column" gap={2}>
+          {header('Huddle', 'Your AI team, on one call')}
+          <Card tone="claude">
+            <Text {...st.strong}>{missing ? 'Install Huddle to get started' : "Huddle isn't running"}</Text>
+            <Text dimColor>Huddle puts AI teammates (on your Claude or ChatGPT plan) on a voice call right beside Claude Code. Install it once; it then starts by itself whenever you use Claude Code.</Text>
+            <Box flexDirection="row" gap={1}>
+              <Button key="install" variant="primary" label={missing ? 'Install Huddle' : 'Reinstall Huddle'} onPress={safe($, () => installApp($))} />
+              {!missing && <Button key="start" label="Start Huddle" onPress={safe($, () => { void update($, launched, () => false); void wake($) })} />}
+              <Button key="site" plain label="What is Huddle?" onPress={safe($, () => openUrl($, SITE))} />
+            </Box>
+          </Card>
         </Box>
       )
     }
 
     if (outdated(l)) {
       return (
-        <Box flexDirection="column" gap={1}>
-          <Text bold>Huddle needs an update</Text>
-          <Text dimColor>You're running Huddle {l.version}. This plugin needs {MIN_VERSION} or newer for starting teams, invites and the floating call. Update Huddle installs the new version and restarts it.</Text>
-          <Box flexDirection="row" gap={1}>
-            <Button key="update" variant="primary" label="Update Huddle" onPress={safe($, () => installApp($))} />
-            <Button key="recheck" label="Check again" onPress={safe($, () => refresh($))} />
-          </Box>
+        <Box flexDirection="column" gap={2}>
+          {header('Huddle')}
+          <Card tone="warning">
+            <Text {...st.strong}>Huddle needs an update</Text>
+            <Text dimColor>You have Huddle {l.version}; starting teams, invites and the floating call need {MIN_VERSION} or newer. Updating takes about a minute and keeps your teams.</Text>
+            <Box flexDirection="row" gap={1}>
+              <Button key="update" variant="primary" label="Update Huddle" onPress={safe($, () => installApp($))} />
+              <Button key="recheck" plain label="Check again" onPress={safe($, () => refresh($))} />
+            </Box>
+          </Card>
         </Box>
       )
     }
-
-    if (working) return <Text dimColor>{working}</Text>
 
     // No team for this folder yet: three ways to start one.
     if (!team) {
       const pr = await read($, proposal)
       if (pr) {
         return (
-          <Box flexDirection="column" gap={1}>
-            <Text bold>{pr.summary || 'Your team'}</Text>
-            <Box flexDirection="column">
-              {pr.roles.map(r => (
-                <Text wrap="wrap">
-                  <Text bold>{r.name}</Text>
-                  <Text dimColor> · {r.title} · {providerName(r.provider)}{r.skills?.length ? ` · skills: ${r.skills.join(', ')}` : ''}</Text>
-                  {r.why ? <Text dimColor>{'\n'}  {r.why}</Text> : null}
-                </Text>
+          <Box flexDirection="column" gap={2}>
+            {header('Your team', pr.summary || undefined)}
+            <Box flexDirection="column" gap={1}>
+              {pr.roles.map((r, i) => (
+                <Card>
+                  <Box flexDirection="row" alignItems="center" gap={1}>
+                    {orb($, e, r.provider, i, '', 30)}
+                    <Box flexDirection="column" flexGrow={1}>
+                      <Text {...st.strong}>{r.name} <Text dimColor {...st.plain}>· {r.title}</Text></Text>
+                      <Text dimColor {...st.small}>{providerName(r.provider)}{r.skills?.length ? ` · skills: ${r.skills.join(', ')}` : ''}</Text>
+                    </Box>
+                  </Box>
+                  {r.why ? <Text dimColor {...st.small}>{r.why}</Text> : null}
+                </Card>
               ))}
             </Box>
             <Box flexDirection="row" gap={1}>
-              <Button key="accept" label="Start with this team" onPress={safe($, () => createTeam($, { mode: 'assembled', roles: pr.raw }))} />
+              <Button key="accept" variant="primary" label={pr.roles.length === 1 ? 'Start with them' : `Start with these ${pr.roles.length}`} onPress={safe($, () => createTeam($, { mode: 'assembled', roles: pr.raw }))} />
               <Button key="again" label="Describe again" onPress={safe($, () => update($, proposal, () => null))} />
             </Box>
           </Box>
         )
       }
+      const others = l.teams.slice(0, 5)
       return (
-        <Box flexDirection="column" gap={1}>
-          <Text bold>Start a Huddle team for {folderName(cwd)}</Text>
-          <Text dimColor>Your teammates work in this folder and talk to you like colleagues on a call.</Text>
-          <Input
-            key="describe"
-            label="Describe the work"
-            placeholder="e.g. A 2D drafting tool in the browser: lines, snapping, DXF export"
-            submitLabel="assemble"
-            rows={2}
-            onSubmit={(value: string) => { if (value.trim()) void propose($, value.trim()) }}
-          />
-          <Text dimColor>Huddle invites only the people that work needs, each with matching Claude skills.</Text>
-          <Box flexDirection="row" gap={1} flexWrap="wrap">
-            <Button key="allrounder" label="Just an all-rounder" onPress={safe($, () => createTeam($, { mode: 'allrounder' }))} />
-            <Button key="custom" label="Build it myself" onPress={safe($, () => openUrl($, 'huddle://new'))} />
-          </Box>
-          {l.teams.length > 0 && (
-            <Box flexDirection="column">
-              <Text dimColor>Or use a team from another folder</Text>
-              <Box flexDirection="row" gap={1} flexWrap="wrap">
-                {l.teams.slice(0, 4).map(t => <Button key={`team-${t.id}`} label={t.name} onPress={safe($, () => update($, selected, () => t.id))} />)}
-              </Box>
+        <Box flexDirection="column" gap={2}>
+          {header('Start a team', `for ${folderName(cwd)}`)}
+          <Card tone="claude">
+            <Text {...st.strong}>What are you working on?</Text>
+            <Text dimColor {...st.small}>Huddle invites only the teammates this needs, each with matching Claude skills. They work in this folder and talk to you like colleagues on a call.</Text>
+            <Input
+              key="describe"
+              placeholder="e.g. A 2D drafting tool in the browser: lines, snapping and DXF export"
+              rows={3}
+              submitLabel="find my team"
+              onInput={(value: string) => { void update($, draft, () => value) }}
+              onSubmit={(value: string) => { if (value.trim()) void propose($, value.trim()) }}
+            />
+            <Box flexDirection="row">
+              <Button key="find" variant="primary" label="Find my team" onPress={safe($, async () => {
+                const text = (await read($, draft)).trim()
+                if (!text) return $.ui.toast('Describe the work first.')
+                return propose($, text)
+              })} />
             </Box>
+          </Card>
+          <Section title="Or">
+            <Box flexDirection="row" alignItems="center" gap={1}>
+              {orb($, e, 'claude', 0, '', 26)}
+              <Box flexDirection="column" flexGrow={1}>
+                <Text {...st.medium}>One all-rounder</Text>
+                <Text dimColor {...st.small}>Starts small and asks before bringing anyone in.</Text>
+              </Box>
+              <Button key="allrounder" label="Start" onPress={safe($, () => createTeam($, { mode: 'allrounder' }))} />
+            </Box>
+            <Box flexDirection="row" alignItems="center" gap={1}>
+              {orb($, e, 'codex', 1, '', 26)}
+              <Box flexDirection="column" flexGrow={1}>
+                <Text {...st.medium}>Pick teammates yourself</Text>
+                <Text dimColor {...st.small}>Choose each one's AI, model, voice and skills in Huddle.</Text>
+              </Box>
+              <Button key="custom" label="Open" onPress={safe($, () => openUrl($, 'huddle://new'))} />
+            </Box>
+          </Section>
+          {others.length > 0 && (
+            <Section title="Your other teams">
+              {others.map(t => (
+                <Box flexDirection="row" alignItems="center" gap={1}>
+                  <Box flexDirection="column" flexGrow={1}>
+                    <Text {...st.medium}>{t.live ? <Text color="success">● </Text> : null}{t.name}</Text>
+                    <Text dimColor {...st.small} wrap="truncate-start">{t.agents.map(a => a.name).join(', ') || 'no one yet'} · {folderName(t.cwd)}</Text>
+                  </Box>
+                  <Button key={`team-${t.id}`} plain label="Use here" onPress={safe($, () => update($, selected, () => t.id))} />
+                </Box>
+              ))}
+            </Section>
           )}
         </Box>
       )
     }
 
     const room = Math.max(3, Math.min(8, (e.viewport?.rows ?? 30) - 18))
+    const chip = team.live ? <Text color="success" {...st.small} {...st.strong}>● LIVE</Text> : <Text dimColor {...st.small}>not on a call</Text>
     return (
-      <Box flexDirection="column" gap={1}>
-        <Box flexDirection="column">
-          <Text bold>
-            {team.name} <Text dimColor>{team.live ? '● on a call' : 'not on a call'}</Text>
-          </Text>
-          <Text dimColor wrap="truncate-start">{team.cwd}</Text>
+      <Box flexDirection="column" gap={2}>
+        {header(team.name, team.cwd, chip)}
+        <Box flexDirection="row" gap={1} flexWrap="wrap">
+          <Button key="join" variant="primary" label={team.live ? 'Join call' : 'Start call'} onPress={safe($, () => join($, team))} />
+          <Button key="refresh" plain label="Refresh" onPress={safe($, () => refresh($))} />
+          {(await read($, selected)) && !inFolder(cwd, team.cwd) && <Button key="unpick" plain label="Back to this folder" onPress={safe($, () => update($, selected, () => null))} />}
         </Box>
         {(team.invites ?? []).map(inv => (
-          <Box flexDirection="column">
-            <Text wrap="wrap">✋ <Text bold>{inv.from}</Text> wants to bring in a <Text bold>{inv.job}</Text>{inv.reason ? <Text dimColor>: {inv.reason}</Text> : null}</Text>
+          <Card tone="warning">
+            <Text>✋ <Text {...st.strong}>{inv.from}</Text> wants to bring in a <Text {...st.strong}>{inv.job}</Text></Text>
+            {inv.reason ? <Text dimColor {...st.small}>{inv.reason}</Text> : null}
             <Box flexDirection="row" gap={1}>
-              <Button key={`yes-${inv.id}`} label="Bring them in" onPress={safe($, () => api($, `/api/projects/${team.id}/invites/${inv.id}/approve`, {}).then(() => refresh($)))} />
+              <Button key={`yes-${inv.id}`} variant="primary" label="Bring them in" onPress={safe($, () => api($, `/api/projects/${team.id}/invites/${inv.id}/approve`, {}).then(() => refresh($)))} />
               <Button key={`no-${inv.id}`} label="Not now" onPress={safe($, () => api($, `/api/projects/${team.id}/invites/${inv.id}/decline`, {}).then(() => refresh($)))} />
             </Box>
-          </Box>
+          </Card>
         ))}
-        <Box flexDirection="column">
-          {team.agents.map(a => (
-            <Text wrap="truncate-end">
-              <Text color={a.status === 'working' ? '#c2643d' : a.status === 'error' ? 'red' : undefined}>
-                {a.status === 'working' ? '◉' : a.status === 'error' ? '✕' : '○'}
-              </Text>{' '}
-              {a.name}
-              <Text dimColor>
-                {' '}· {providerName(a.provider)}
-                {a.status === 'working' && a.activity ? ` · ${a.activity}` : a.status === 'error' ? ` · ${a.activity}` : ''}
-              </Text>
-            </Text>
+        <Section title={`People · ${team.agents.length}`}>
+          {team.agents.length === 0 && <Text dimColor>No one on this team yet. Say “bring in a developer” below.</Text>}
+          {team.agents.map((a, i) => (
+            <Box flexDirection="row" alignItems="center" gap={1}>
+              {orb($, e, a.provider, i, a.status === 'working' ? 'working' : a.status === 'error' ? 'error' : '', 30)}
+              <Box flexDirection="column" flexGrow={1}>
+                <Text {...st.strong} wrap="truncate-end">{a.name} <Text dimColor {...st.plain}>· {a.title || providerName(a.provider)}</Text></Text>
+                <Text {...st.small} wrap="truncate-end" color={a.status === 'working' ? 'claude' : a.status === 'error' ? 'error' : undefined} dimColor={a.status !== 'working' && a.status !== 'error'}>
+                  {a.status === 'working' ? (a.activity && !/^thinking/.test(a.activity) ? a.activity : 'Thinking…') : a.status === 'error' ? a.activity : `${providerName(a.provider)}${a.model && a.model !== 'default' ? ` · ${a.model}` : ''}`}
+                </Text>
+              </Box>
+            </Box>
           ))}
-        </Box>
+        </Section>
         {team.recent.length > 0 && (
-          <Box flexDirection="column">
-            <Text dimColor>Recent</Text>
+          <Section title="Recent">
             {team.recent.slice(-room).map(line => (
-              <Text wrap="wrap" maxLines={3}>
-                <Text bold>{line.from}</Text>
-                <Text dimColor> → {line.to}: </Text>
-                {line.text}
-              </Text>
+              <Box flexDirection="column">
+                <Text {...st.small}><Text {...st.strong}>{line.from}</Text><Text dimColor> → {line.to}</Text></Text>
+                <Text wrap="wrap" {...st.clamp}>{line.text}</Text>
+              </Box>
             ))}
-          </Box>
+          </Section>
         )}
         <Input
           key="huddle-message"
-          label="Message"
-          placeholder="Start with a name: Developer, run the tests. Or: bring in a designer"
+          placeholder="Message the team: start with a name, or “bring in a designer”"
           submitLabel="send"
           onSubmit={async (value: string) => {
             const text = value.trim()
             if (text) $.ui.toast(await say($, team, text))
           }}
         />
-        <Box flexDirection="row" gap={1} flexWrap="wrap">
-          <Button key="join" label={team.live ? 'Join call' : 'Start call'} onPress={safe($, () => join($, team))} />
-          <Button key="refresh" label="Refresh" onPress={safe($, () => refresh($))} />
-        </Box>
       </Box>
     )
   })
