@@ -209,13 +209,16 @@
         <p style="margin-top:18px"><a class="btn" href="http://localhost:4317">Already running? Open Huddle ↗</a></p>
       </div>
       <div class="steps">
-        <div class="step reveal"><div><h3>Download and install</h3>
+        <div class="step reveal"><div><h3>Install on a Mac: one line in Terminal</h3>
+          <pre>curl -fsSL https://huddle-seven-kappa.vercel.app/install.sh | bash</pre>
+          <p class="muted" style="margin-top:10px;font-size:14px">Downloads Huddle, puts it in Applications and starts it in the background. This is the reliable way on a Mac: Huddle isn't signed with an Apple certificate yet, and macOS blocks a browser download of it as "damaged" or "corrupted".</p></div></div>
+        <div class="step reveal"><div><h3>Or download</h3>
           <div class="dl">
             <a class="btn dark" href="https://github.com/shivambisen/huddle/releases/latest/download/Huddle-mac-arm64.dmg">Mac · Apple Silicon</a>
             <a class="btn" href="https://github.com/shivambisen/huddle/releases/latest/download/Huddle-mac-x64.dmg">Mac · Intel</a>
             <a class="btn" href="https://github.com/shivambisen/huddle/releases/latest/download/Huddle-win-x64.exe">Windows</a>
           </div>
-          <p class="muted" style="margin-top:10px;font-size:14px">First open on a Mac: right-click Huddle → <b>Open</b>, since it isn't notarized yet. On Windows, if SmartScreen appears: <b>More info</b> → <b>Run anyway</b>.</p></div></div>
+          <p class="muted" style="margin-top:10px;font-size:14px">On Windows, if SmartScreen appears: <b>More info</b> → <b>Run anyway</b>. On a Mac, if macOS says the download is damaged, use the one-line install above.</p></div></div>
         <div class="step reveal"><div><h3>Connect your AI</h3><p class="muted" style="font-size:15px">Huddle finds Claude Code and Codex on your computer and signs you in with your own Claude or ChatGPT account. No API keys.</p></div></div>
         <div class="step reveal"><div><h3>Add Huddle to Claude Code <span class="muted" style="font-weight:400">(optional)</span></h3><p class="muted" style="font-size:15px">In Huddle, open Connections → <b>Add to Claude Code</b>. You get a Huddle row above the prompt, a live panel and <code>/huddle</code>. Or from a terminal:</p><pre>claude plugin marketplace add shivambisen/huddle
 claude plugin install huddle@huddle</pre></div></div>

@@ -1,6 +1,6 @@
 {
   "name": "huddle",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Huddle as part of Claude Code: your AI team's call next to every session. Starts the Huddle app quietly, starts teams, joins calls in a floating window, and lets Claude ask the team.",
   "types": "./types/index.d.ts",
   "author": {

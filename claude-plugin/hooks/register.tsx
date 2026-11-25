@@ -24,6 +24,7 @@ const cwdAtom = atom({ plugin: 'huddle', key: 'cwd' } as const, '')
 const proposal = atom({ plugin: 'huddle', key: 'proposal' } as const, null, { shape: 'proposal-1' })
 const busy = atom({ plugin: 'huddle', key: 'busy' } as const, null)
 const launched = atom({ plugin: 'huddle', key: 'launched' } as const, false)
+const missingApp = atom({ plugin: 'huddle', key: 'missingApp' } as const, false)
 
 // The Huddle app this plugin needs at least (team set-up, invites, the floating call).
 const MIN_VERSION = '0.2.0'
@@ -93,7 +94,8 @@ async function wake($: EngineInterface) {
   if (await refresh($)) return true
   if (!(await read($, launched))) {
     await update($, launched, () => true)
-    if (!(await openUrl($, 'huddle://background', true))) return false
+    if (!(await openUrl($, 'huddle://background', true))) { await update($, missingApp, () => true); return false }
+    await update($, missingApp, () => false)
   }
   for (let i = 0; i < 10; i++) {
     await $.clock.sleep(1500)
@@ -156,6 +158,33 @@ async function propose($: EngineInterface, description: string) {
 }
 
 const providerName = (p: string) => (p === 'codex' ? 'ChatGPT' : p === 'claude' ? 'Claude' : p === 'gemini' ? 'Gemini' : p)
+
+// Install or update the Huddle app from Claude Code, in one click. On a Mac this runs the
+// same one-line installer as the website (a curl download isn't quarantined, so macOS
+// doesn't block the unsigned app); on Windows it installs silently for this user.
+const INSTALL_MAC = `curl -fsSL ${SITE}/install.sh | bash`
+const INSTALL_WIN = "$f = Join-Path $env:TEMP 'HuddleSetup.exe'; curl.exe -fsSL -o $f https://github.com/shivambisen/huddle/releases/latest/download/Huddle-win-x64.exe; if ($LASTEXITCODE) { exit 1 }; Start-Process $f -ArgumentList '/S' -Wait; Start-Process (Join-Path $env:LOCALAPPDATA 'Programs\\Huddle\\Huddle.exe') -ArgumentList '--background'"
+
+async function installApp($: EngineInterface) {
+  await update($, busy, () => 'Installing Huddle… (about a minute)')
+  $.ui.toast('Installing Huddle…')
+  try {
+    let isMac = true
+    try { isMac = (await $.process.run(['uname', '-s'])).stdout.trim() === 'Darwin' } catch { isMac = false }
+    const r = isMac
+      ? await $.process.run(['bash', '-c', INSTALL_MAC], { timeoutMs: 600000 })
+      : await $.process.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', INSTALL_WIN], { timeoutMs: 600000 })
+    if (r.exitCode !== 0) throw new Error((r.stderr || r.stdout).trim().split('\n').slice(-1)[0] || 'the installer failed')
+    await update($, missingApp, () => false)
+    await update($, launched, () => true)
+    for (let i = 0; i < 15 && !(await refresh($)); i++) await $.clock.sleep(1500)
+    const l = await read($, live)
+    $.ui.toast(l ? `Huddle ${l.version} is installed and running.` : 'Huddle is installed. It will start with your next Claude Code session.')
+    if (l) { try { await api($, '/api/quickstart', { cwd: await read($, cwdAtom) }) } catch {} }
+  } finally {
+    await update($, busy, () => null)
+  }
+}
 
 // Every button goes through this: a failure shows as a toast instead of silently doing nothing.
 function safe($: EngineInterface, work: () => Promise<unknown> | unknown) {
@@ -237,9 +266,9 @@ export const register: Register = on => {
       <Box flexDirection="row" alignItems="center" gap={1}>
         <Text color="#c2643d">◐</Text>
         <Text bold>Huddle</Text>
-        {!l && <Text dimColor>starting…</Text>}
+        {!l && <Text dimColor>{(await read($, missingApp)) ? 'not installed' : 'starting…'}</Text>}
         {outdated(l) && <Text color="#b7791f">needs an update for this plugin</Text>}
-        {outdated(l) && <Button key="huddle-update" variant="primary" label="Update Huddle" onPress={safe($, () => openUrl($, DOWNLOAD))} />}
+        {outdated(l) && <Button key="huddle-update" variant="primary" label="Update Huddle" onPress={safe($, () => installApp($))} />}
         {l && team && (
           <Text dimColor wrap="truncate-end">
             {team.live ? '● ' : ''}
@@ -250,7 +279,7 @@ export const register: Register = on => {
         {team && inv && <Button key="huddle-approve" label="Bring them in" onPress={safe($, () => api($, `/api/projects/${team.id}/invites/${inv.id}/approve`, {}).then(() => refresh($)))} />}
         {team && <Button key="huddle-join" label={team.live ? 'Join call' : 'Start call'} onPress={safe($, () => join($, team))} />}
         {l && !team && <Button key="huddle-start" label="Start a team" onPress={safe($, () => $.ui.open({ id: PANE, title: 'Huddle' }))} />}
-        {!l && <Button key="huddle-get" label="Get Huddle" onPress={safe($, () => openUrl($, SITE))} />}
+        {!l && <Button key="huddle-get" variant="primary" label="Install Huddle" onPress={safe($, () => installApp($))} />}
         <Button key="huddle-panel" label="Panel" onPress={safe($, () => $.ui.open({ id: PANE, title: 'Huddle' }))} />
         <Button key="huddle-hide" label="Hide" onPress={safe($, () => update($, isHidden, () => true))} />
       </Box>
@@ -265,14 +294,17 @@ export const register: Register = on => {
     const team = pickTeam(l, cwd, await read($, selected))
     const working = await read($, busy)
 
+    if (working) return <Text dimColor>{working}</Text>
+
     if (!l) {
       return (
         <Box flexDirection="column" gap={1}>
-          <Text>Huddle isn't running on this computer.</Text>
-          <Text dimColor>Huddle puts your AI teammates on a voice call, right next to Claude Code. Install the app once; after that it starts by itself.</Text>
+          <Text>{(await read($, missingApp)) ? "Huddle isn't installed yet." : "Huddle isn't running on this computer."}</Text>
+          <Text dimColor>Huddle puts your AI teammates on a voice call, right next to Claude Code. Install it once; after that it starts by itself whenever you use Claude Code.</Text>
           <Box flexDirection="row" gap={1}>
+            <Button key="install" variant="primary" label="Install Huddle" onPress={safe($, () => installApp($))} />
             <Button key="start" label="Start Huddle" onPress={safe($, () => { void update($, launched, () => false); void wake($) })} />
-            <Button key="site" label="Get Huddle" onPress={safe($, () => openUrl($, SITE))} />
+            <Button key="site" label="About Huddle" onPress={safe($, () => openUrl($, SITE))} />
           </Box>
         </Box>
       )
@@ -282,9 +314,9 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" gap={1}>
           <Text bold>Huddle needs an update</Text>
-          <Text dimColor>You're running Huddle {l.version}. This plugin needs {MIN_VERSION} or newer for starting teams, invites and the floating call. Quit Huddle from the ◐ menu-bar icon (or the Dock), install the new version, and it starts by itself next time.</Text>
+          <Text dimColor>You're running Huddle {l.version}. This plugin needs {MIN_VERSION} or newer for starting teams, invites and the floating call. Update Huddle installs the new version and restarts it.</Text>
           <Box flexDirection="row" gap={1}>
-            <Button key="update" variant="primary" label="Download the update" onPress={safe($, () => openUrl($, DOWNLOAD))} />
+            <Button key="update" variant="primary" label="Update Huddle" onPress={safe($, () => installApp($))} />
             <Button key="recheck" label="Check again" onPress={safe($, () => refresh($))} />
           </Box>
         </Box>

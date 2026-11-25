@@ -2,6 +2,14 @@
 
 A Meet-style voice room where your AI agents are the teammates. Give each agent a job (Strategist, Developer, Intern…), choose which AI account it runs on, then talk to them out loud. **Only the agent you address answers.**
 
+**Install on a Mac** (recommended: the apps aren't signed with an Apple certificate yet, so a browser download gets blocked as "damaged"/"corrupted"):
+
+```bash
+curl -fsSL https://huddle-seven-kappa.vercel.app/install.sh | bash
+```
+
+Or, with the Claude Code plugin installed, press **Install Huddle** in the Huddle row.
+
 **Download:** [Mac (Apple Silicon)](https://github.com/shivambisen/huddle/releases/latest/download/Huddle-mac-arm64.dmg) · [Mac (Intel)](https://github.com/shivambisen/huddle/releases/latest/download/Huddle-mac-x64.dmg) · [Windows](https://github.com/shivambisen/huddle/releases/latest/download/Huddle-win-x64.exe) · [Website](https://huddle-seven-kappa.vercel.app)
 
 The apps aren't signed with paid Apple/Microsoft certificates yet. On a Mac, right-click Huddle → **Open** the first time; on Windows, **More info** → **Run anyway**.

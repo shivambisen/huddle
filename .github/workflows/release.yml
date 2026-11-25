@@ -64,7 +64,9 @@ jobs:
             | Intel Mac | `Huddle-mac-x64.dmg` |
             | Windows 10/11 | `Huddle-win-x64.exe` |
 
-            **First open on a Mac:** the app isn't notarized by Apple yet, so macOS warns about it. Right-click Huddle in Applications → **Open** → **Open**. If macOS says it's damaged, run `xattr -dr com.apple.quarantine /Applications/Huddle.app` in Terminal.
+            **On a Mac, install with one line** (the app isn't signed with an Apple certificate yet, so macOS blocks browser downloads of it as "damaged" or "corrupted"):
+            `curl -fsSL https://huddle-seven-kappa.vercel.app/install.sh | bash`
+            With the Claude Code plugin installed, the **Install Huddle** button does the same.
 
             **On Windows:** SmartScreen may say it protected your PC. Click **More info** → **Run anyway**.
 

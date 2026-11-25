@@ -45,6 +45,7 @@ declare module 'claude-code' {
       proposal: Shaped<Proposal | null>
       busy: string | null
       launched: boolean
+      missingApp: boolean
     }
   }
 }
